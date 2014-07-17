@@ -30,7 +30,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
+#include "drmtest.h"
 
 typedef enum {
 	TRANSC_A = 0,
@@ -42,14 +44,20 @@ typedef enum {
 typedef enum {
 	REG_HDMIB_GEN4    = 0x61140,
 	REG_HDMIC_GEN4    = 0x61160,
+	REG_HDMIB_VLV     = 0x1e1140,
+	REG_HDMIC_VLV     = 0x1e1160,
 	REG_HDMIB_PCH     = 0xe1140,
 	REG_HDMIC_PCH     = 0xe1150,
 	REG_HDMID_PCH     = 0xe1160,
 	REG_DIP_CTL_GEN4  = 0x61170,
+	REG_DIP_CTL_A_VLV   = 0x1e0200,
+	REG_DIP_CTL_B_VLV   = 0x1e1170,
 	REG_DIP_CTL_A     = 0xe0200,
 	REG_DIP_CTL_B     = 0xe1200,
 	REG_DIP_CTL_C     = 0xe2200,
 	REG_DIP_DATA_GEN4 = 0x61178,
+	REG_DIP_DATA_A_VLV  = 0x1e0208,
+	REG_DIP_DATA_B_VLV  = 0x1e1174,
 	REG_DIP_DATA_A    = 0xe0208,
 	REG_DIP_DATA_B    = 0xe1208,
 	REG_DIP_DATA_C    = 0xe2208,
@@ -125,6 +133,8 @@ typedef enum {
 #define SPD_INFOFRAME_VERSION 0x01
 #define SPD_INFOFRAME_LENGTH  0x19
 
+#define VENDOR_ID_HDMI	0x000c03
+
 typedef struct {
 	uint8_t type;
 	uint8_t version;
@@ -175,11 +185,46 @@ typedef union {
 	} __attribute__((packed)) spd;
 	struct {
 		DipInfoFrameHeader header;
+		uint8_t checksum;
+
+		uint8_t id[3];
+
+		uint8_t Rsvd0        :5;
+		uint8_t video_format :3;
+
+		union {
+			uint8_t vic;
+			struct {
+				uint8_t Rsvd1         :4;
+				uint8_t s3d_structure :4;
+			} s3d;
+		} pb5;
+
+		uint8_t Rsvd2        :4;
+		uint8_t s3d_ext_data :4;
+	} __attribute__((packed)) vendor;
+	struct {
+		DipInfoFrameHeader header;
 		uint8_t body[27];
 	} generic;
 	uint8_t data8[128];
 	uint32_t data32[16];
 } DipInfoFrame;
+
+Register vlv_hdmi_ports[] = {
+	REG_HDMIB_VLV,
+	REG_HDMIC_VLV,
+};
+
+Register vlv_dip_ctl_regs[] = {
+	REG_DIP_CTL_A_VLV,
+	REG_DIP_CTL_B_VLV,
+};
+
+Register vlv_dip_data_regs[] = {
+	REG_DIP_DATA_A_VLV,
+	REG_DIP_DATA_B_VLV,
+};
 
 Register gen4_hdmi_ports[] = {
 	REG_HDMIB_GEN4,
@@ -217,6 +262,7 @@ const char *dip_frequency_names[] = {
 	"reserved (invalid)"
 };
 
+struct pci_device *pci_dev;
 int gen = 0;
 
 static const char *spd_source_to_string(SourceDevice source)
@@ -253,7 +299,9 @@ static const char *spd_source_to_string(SourceDevice source)
 
 static Register get_dip_ctl_reg(Transcoder transcoder)
 {
-	if (gen == 4)
+	if (IS_VALLEYVIEW(pci_dev->device_id))
+		return vlv_dip_ctl_regs[transcoder];
+	else if (gen == 4)
 		return REG_DIP_CTL_GEN4;
 	else
 		return pch_dip_ctl_regs[transcoder];
@@ -261,7 +309,9 @@ static Register get_dip_ctl_reg(Transcoder transcoder)
 
 static Register get_dip_data_reg(Transcoder transcoder)
 {
-	if (gen == 4)
+	if (IS_VALLEYVIEW(pci_dev->device_id))
+		return vlv_dip_data_regs[transcoder];
+	else if (gen == 4)
 		return REG_DIP_DATA_GEN4;
 	else
 		return pch_dip_data_regs[transcoder];
@@ -269,7 +319,9 @@ static Register get_dip_data_reg(Transcoder transcoder)
 
 static Register get_hdmi_port(int hdmi_port_index)
 {
-	if (gen == 4) {
+	if (IS_VALLEYVIEW(pci_dev->device_id))
+		return vlv_hdmi_ports[hdmi_port_index];
+	else if (gen == 4) {
 		assert(hdmi_port_index < 2);
 		return gen4_hdmi_ports[hdmi_port_index];
 	} else {
@@ -343,9 +395,9 @@ static void dump_port_info(int hdmi_port_index)
 	if (!(val & HDMI_PORT_ENABLE))
 		return;
 
-	if (gen == 4)
+	if (gen == 4 || IS_VALLEYVIEW(pci_dev->device_id))
 		transcoder = (val & HDMI_PORT_TRANSCODER_GEN4) >> 30;
-	else if (pch >= PCH_CPT)
+	else if (intel_pch >= PCH_CPT)
 		transcoder = (val & HDMI_PORT_TRANSCODER_CPT) >> 29;
 	else
 		transcoder = (val & HDMI_PORT_TRANSCODER_IBX) >> 30;
@@ -381,7 +433,7 @@ static void dump_raw_infoframe(DipInfoFrame *frame)
 static void dump_avi_info(Transcoder transcoder)
 {
 	Register reg = get_dip_ctl_reg(transcoder);
-	uint32_t val = INREG(reg);
+	uint32_t val;
 	DipFrequency freq;
 	DipInfoFrame frame;
 
@@ -411,7 +463,7 @@ static void dump_avi_info(Transcoder transcoder)
 	       frame.avi.R, frame.avi.M, frame.avi.C);
 	printf("- SC: %x, Q: %x, EC: %x, ITC: %x\n",
 	       frame.avi.SC, frame.avi.Q, frame.avi.EC, frame.avi.ITC);
-	printf("- VIC: %x, Rsvd1: %x\n", frame.avi.VIC, frame.avi.Rsvd1);
+	printf("- VIC: %d, Rsvd1: %x\n", frame.avi.VIC, frame.avi.Rsvd1);
 	printf("- PR: %x, Rsvd2: %x\n", frame.avi.PR, frame.avi.Rsvd2);
 	printf("- top: %x, bottom: %x, left: %x, right: %x\n",
 	       frame.avi.top, frame.avi.bottom, frame.avi.left,
@@ -424,10 +476,63 @@ static void dump_avi_info(Transcoder transcoder)
 		printf("Invalid InfoFrame checksum!\n");
 }
 
+static const char *vendor_id_to_string(uint32_t id)
+{
+	switch (id) {
+	case VENDOR_ID_HDMI:
+		return "HDMI";
+	default:
+		return "Unknown";
+	}
+}
+
+static const char *s3d_structure_to_string(int format)
+{
+	switch (format) {
+	case 0:
+		return "Frame Packing";
+	case 6:
+		return "Top Bottom";
+	case 8:
+		return "Side By Side (half)";
+	default:
+		return "Reserved";
+	}
+}
+
+static void dump_vendor_hdmi(DipInfoFrame *frame)
+{
+	int vic_present = frame->vendor.video_format & 0x1;
+	int s3d_present = frame->vendor.video_format & 0x2;
+
+	printf("- video format: 0x%03x %s\n", frame->vendor.video_format,
+	       s3d_present ? "(3D)" : "");
+
+	if (vic_present && s3d_present) {
+		printf("Error: HDMI VIC and S3D bits set. Only one of those "
+		       " at a time is valid\n");
+		return;
+	}
+
+	if (vic_present)
+		printf("- HDMI VIC: %d\n", frame->vendor.pb5.vic);
+	else if (s3d_present) {
+		int s3d_structure = frame->vendor.pb5.s3d.s3d_structure;
+
+		printf("- 3D Format: %s\n",
+		       s3d_structure_to_string(s3d_structure));
+
+		/* Side-by-side (half) */
+		if (s3d_structure >= 8)
+			printf("- 3D Ext Data 0x%x\n",
+			       frame->vendor.s3d_ext_data);
+	}
+}
+
 static void dump_vendor_info(Transcoder transcoder)
 {
 	Register reg = get_dip_ctl_reg(transcoder);
-	uint32_t val = INREG(reg);
+	uint32_t val, vendor_id;
 	DipFrequency freq;
 	DipInfoFrame frame;
 
@@ -446,6 +551,15 @@ static void dump_vendor_info(Transcoder transcoder)
 
 	dump_raw_infoframe(&frame);
 
+	vendor_id = frame.vendor.id[2] << 16 | frame.vendor.id[1] << 8 |
+		    frame.vendor.id[0];
+
+	printf("- vendor Id: 0x%06x (%s)\n", vendor_id,
+	       vendor_id_to_string(vendor_id));
+
+	if (vendor_id == VENDOR_ID_HDMI)
+		dump_vendor_hdmi(&frame);
+
 	if (!infoframe_valid_checksum(&frame))
 		printf("Invalid InfoFrame checksum!\n");
 }
@@ -453,7 +567,7 @@ static void dump_vendor_info(Transcoder transcoder)
 static void dump_gamut_info(Transcoder transcoder)
 {
 	Register reg = get_dip_ctl_reg(transcoder);
-	uint32_t val = INREG(reg);
+	uint32_t val;
 	DipFrequency freq;
 	DipInfoFrame frame;
 
@@ -479,7 +593,7 @@ static void dump_gamut_info(Transcoder transcoder)
 static void dump_spd_info(Transcoder transcoder)
 {
 	Register reg = get_dip_ctl_reg(transcoder);
-	uint32_t val = INREG(reg);
+	uint32_t val;
 	DipFrequency freq;
 	DipInfoFrame frame;
 	char vendor[9];
@@ -559,7 +673,12 @@ static void dump_all_info(void)
 {
 	unsigned int i;
 
-	if (gen == 4) {
+	if (IS_VALLEYVIEW(pci_dev->device_id)) {
+		for (i = 0; i < ARRAY_SIZE(vlv_hdmi_ports); i++)
+			dump_port_info(i);
+		for (i = 0; i < ARRAY_SIZE(vlv_dip_ctl_regs); i++)
+			dump_transcoder_info(i);
+	} else if (gen == 4) {
 		for (i = 0; i < ARRAY_SIZE(gen4_hdmi_ports); i++)
 			dump_port_info(i);
 		dump_transcoder_info(0);
@@ -660,7 +779,7 @@ static int parse_infoframe_option_s(const char *name, const char *s,
 static void change_avi_infoframe(Transcoder transcoder, char *commands)
 {
 	Register reg = get_dip_ctl_reg(transcoder);
-	uint32_t val = INREG(reg);
+	uint32_t val;
 	DipInfoFrame frame;
 	char option[32];
 	uint32_t option_val;
@@ -760,7 +879,7 @@ static void change_avi_infoframe(Transcoder transcoder, char *commands)
 static void change_spd_infoframe(Transcoder transcoder, char *commands)
 {
 	Register reg = get_dip_ctl_reg(transcoder);
-	uint32_t val = INREG(reg);
+	uint32_t val;
 	DipInfoFrame frame;
 	char option[16];
 	char option_val_s[32];
@@ -772,7 +891,7 @@ static void change_spd_infoframe(Transcoder transcoder, char *commands)
 	val = INREG(reg);
 
 	while (1) {
-		rc = sscanf(current, "%31s%n", option, &read);
+		rc = sscanf(current, "%15s%n", option, &read);
 		current = &current[read];
 		if (rc == EOF) {
 			break;
@@ -963,7 +1082,6 @@ int main(int argc, char *argv[])
 {
 	int opt;
 	int ret = 0;
-	struct pci_device *pci_dev;
 	Transcoder transcoder = TRANSC_INVALID;
 	DipType dip = DIP_INVALID;
 	Register hdmi_port;
@@ -1103,7 +1221,7 @@ int main(int argc, char *argv[])
 				transcoder = TRANSC_A;
 			else if (!strcmp(optarg, "B"))
 				transcoder = TRANSC_B;
-			else if (pch >= PCH_CPT && !strcmp(optarg, "C")) {
+			else if (intel_pch >= PCH_CPT && !strcmp(optarg, "C")) {
 				transcoder = TRANSC_C;
 			} else {
 				printf("Invalid transcoder.\n");

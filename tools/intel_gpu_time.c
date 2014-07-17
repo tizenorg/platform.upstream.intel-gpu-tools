@@ -34,7 +34,9 @@
 #include <sys/resource.h>
 #include <sys/wait.h>
 
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
+#include "intel_reg.h"
 
 #define SAMPLES_PER_SEC             10000
 
@@ -65,7 +67,7 @@ int main(int argc, char **argv)
 	static struct rusage rusage;
 	int status;
 
-	intel_get_mmio(intel_get_pci_device());
+	intel_mmio_use_pci_bar(intel_get_pci_device());
 
 	if (argc == 1) {
 		fprintf(stderr, "usage: %s cmd [args...]\n", argv[0]);

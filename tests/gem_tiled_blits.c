@@ -44,18 +44,19 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include "drm.h"
-#include "i915_drm.h"
+
+#include <drm.h>
+
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
-#include "intel_bufmgr.h"
-#include "intel_batchbuffer.h"
-#include "intel_gpu_tools.h"
+#include "intel_chipset.h"
+#include "intel_io.h"
+#include "igt_aux.h"
 
 static drm_intel_bufmgr *bufmgr;
 struct intel_batchbuffer *batch;
@@ -67,23 +68,22 @@ create_bo(uint32_t start_val)
 	drm_intel_bo *bo, *linear_bo;
 	uint32_t *linear;
 	uint32_t tiling = I915_TILING_X;
-	int ret, i;
+	int i;
 
 	bo = drm_intel_bo_alloc(bufmgr, "tiled bo", 1024 * 1024, 4096);
-	ret = drm_intel_bo_set_tiling(bo, &tiling, width * 4);
-	assert(ret == 0);
-	assert(tiling == I915_TILING_X);
+	do_or_die(drm_intel_bo_set_tiling(bo, &tiling, width * 4));
+	igt_assert(tiling == I915_TILING_X);
 
 	linear_bo = drm_intel_bo_alloc(bufmgr, "linear src", 1024 * 1024, 4096);
 
 	/* Fill the BO with dwords starting at start_val */
-	drm_intel_bo_map(linear_bo, 1);
+	do_or_die(drm_intel_bo_map(linear_bo, 1));
 	linear = linear_bo->virtual;
 	for (i = 0; i < 1024 * 1024 / 4; i++)
 		linear[i] = start_val++;
 	drm_intel_bo_unmap(linear_bo);
 
-	intel_copy_bo (batch, bo, linear_bo, width, height);
+	intel_copy_bo (batch, bo, linear_bo, width*height*4);
 
 	drm_intel_bo_unreference(linear_bo);
 
@@ -99,18 +99,16 @@ check_bo(drm_intel_bo *bo, uint32_t start_val)
 
 	linear_bo = drm_intel_bo_alloc(bufmgr, "linear dst", 1024 * 1024, 4096);
 
-	intel_copy_bo(batch, linear_bo, bo, width, height);
+	intel_copy_bo(batch, linear_bo, bo, width*height*4);
 
-	drm_intel_bo_map(linear_bo, 0);
+	do_or_die(drm_intel_bo_map(linear_bo, 0));
 	linear = linear_bo->virtual;
 
 	for (i = 0; i < 1024 * 1024 / 4; i++) {
-		if (linear[i] != start_val) {
-			fprintf(stderr, "Expected 0x%08x, found 0x%08x "
-				"at offset 0x%08x\n",
-				start_val, linear[i], i * 4);
-			abort();
-		}
+		igt_assert_f(linear[i] == start_val,
+			     "Expected 0x%08x, found 0x%08x "
+			     "at offset 0x%08x\n",
+			     start_val, linear[i], i * 4);
 		start_val++;
 	}
 	drm_intel_bo_unmap(linear_bo);
@@ -118,47 +116,26 @@ check_bo(drm_intel_bo *bo, uint32_t start_val)
 	drm_intel_bo_unreference(linear_bo);
 }
 
-int main(int argc, char **argv)
+static void run_test(int count)
 {
 	drm_intel_bo **bo;
 	uint32_t *bo_start_val;
 	uint32_t start = 0;
-	int i, fd, count;
-
-	fd = drm_open_any();
-
-	count = 0;
-	if (argc > 1)
-		count = atoi(argv[1]);
-	if (count == 0) {
-		count = 3 * gem_aperture_size(fd) / (1024*1024) / 2;
-		count += (count & 1) == 0;
-	}
-
-	if (count > intel_get_total_ram_mb() * 9 / 10) {
-		count = intel_get_total_ram_mb() * 9 / 10;
-		printf("not enough RAM to run test, reducing buffer count\n");
-	}
-
-	printf("Using %d 1MiB buffers\n", count);
+	int i;
 
 	bo = malloc(sizeof(drm_intel_bo *)*count);
 	bo_start_val = malloc(sizeof(uint32_t)*count);
-
-	bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
-	drm_intel_bufmgr_gem_enable_reuse(bufmgr);
-	batch = intel_batchbuffer_alloc(bufmgr, intel_get_drm_devid(fd));
 
 	for (i = 0; i < count; i++) {
 		bo[i] = create_bo(start);
 		bo_start_val[i] = start;
 		start += 1024 * 1024 / 4;
 	}
-	printf("Verifying initialisation...\n");
+	igt_info("Verifying initialisation...\n");
 	for (i = 0; i < count; i++)
 		check_bo(bo[i], bo_start_val[i]);
 
-	printf("Cyclic blits, forward...\n");
+	igt_info("Cyclic blits, forward...\n");
 	for (i = 0; i < count * 4; i++) {
 		int src = i % count;
 		int dst = (i+1) % count;
@@ -166,13 +143,21 @@ int main(int argc, char **argv)
 		if (src == dst)
 			continue;
 
-		intel_copy_bo(batch, bo[dst], bo[src], width, height);
+		intel_copy_bo(batch, bo[dst], bo[src], width*height*4);
 		bo_start_val[dst] = bo_start_val[src];
 	}
 	for (i = 0; i < count; i++)
 		check_bo(bo[i], bo_start_val[i]);
 
-	printf("Cyclic blits, backward...\n");
+	if (igt_run_in_simulation()) {
+		for (i = 0; i < count; i++)
+			drm_intel_bo_unreference(bo[i]);
+		free(bo_start_val);
+		free(bo);
+		return;
+	}
+
+	igt_info("Cyclic blits, backward...\n");
 	for (i = 0; i < count * 4; i++) {
 		int src = (i+1) % count;
 		int dst = i % count;
@@ -180,13 +165,13 @@ int main(int argc, char **argv)
 		if (src == dst)
 			continue;
 
-		intel_copy_bo(batch, bo[dst], bo[src], width, height);
+		intel_copy_bo(batch, bo[dst], bo[src], width*height*4);
 		bo_start_val[dst] = bo_start_val[src];
 	}
 	for (i = 0; i < count; i++)
 		check_bo(bo[i], bo_start_val[i]);
 
-	printf("Random blits...\n");
+	igt_info("Random blits...\n");
 	for (i = 0; i < count * 4; i++) {
 		int src = random() % count;
 		int dst = random() % count;
@@ -194,21 +179,69 @@ int main(int argc, char **argv)
 		if (src == dst)
 			continue;
 
-		intel_copy_bo(batch, bo[dst], bo[src], width, height);
+		intel_copy_bo(batch, bo[dst], bo[src], width*height*4);
 		bo_start_val[dst] = bo_start_val[src];
 	}
-	for (i = 0; i < count; i++)
-		check_bo(bo[i], bo_start_val[i]);
-
 	for (i = 0; i < count; i++) {
+		check_bo(bo[i], bo_start_val[i]);
 		drm_intel_bo_unreference(bo[i]);
-		bo[i] = NULL;
 	}
 
-	intel_batchbuffer_free(batch);
-	drm_intel_bufmgr_destroy(bufmgr);
+	free(bo_start_val);
+	free(bo);
+}
 
-	close(fd);
+int fd;
 
-	return 0;
+int main(int argc, char **argv)
+{
+	int count = 0;
+
+	igt_subtest_init(argc, argv);
+
+	igt_fixture {
+		fd = drm_open_any();
+
+		if (igt_run_in_simulation())
+			count = 2;
+		if (argc > 1)
+			count = atoi(argv[1]);
+		if (count == 0) {
+			count = 3 * gem_aperture_size(fd) / (1024*1024) / 2;
+			count += (count & 1) == 0;
+		} else if (count < 2) {
+			fprintf(stderr, "count must be >= 2\n");
+			return 1;
+		}
+
+		if (count > intel_get_total_ram_mb() * 9 / 10) {
+			count = intel_get_total_ram_mb() * 9 / 10;
+			igt_info("not enough RAM to run test, reducing buffer count\n");
+		}
+
+		igt_info("Using %d 1MiB buffers\n", count);
+
+		bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
+		drm_intel_bufmgr_gem_enable_reuse(bufmgr);
+		drm_intel_bufmgr_gem_set_vma_cache_size(bufmgr, 32);
+		batch = intel_batchbuffer_alloc(bufmgr, intel_get_drm_devid(fd));
+	}
+
+	igt_subtest("normal")
+		run_test(count);
+
+	igt_subtest("interruptible") {
+		igt_fork_signal_helper();
+		run_test(count);
+		igt_stop_signal_helper();
+	}
+
+	igt_fixture {
+		intel_batchbuffer_free(batch);
+		drm_intel_bufmgr_destroy(bufmgr);
+
+		close(fd);
+	}
+
+	igt_exit();
 }

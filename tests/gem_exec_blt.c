@@ -30,19 +30,17 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
 #include <sys/time.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 #include "intel_chipset.h"
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
 
 #define OBJECT_SIZE 16384
 
@@ -52,7 +50,8 @@
 #define BLT_SRC_TILED		(1<<15)
 #define BLT_DST_TILED		(1<<11)
 
-static int gem_linear_blt(uint32_t *batch,
+static int gem_linear_blt(int fd,
+			  uint32_t *batch,
 			  uint32_t src,
 			  uint32_t dst,
 			  uint32_t length,
@@ -61,14 +60,17 @@ static int gem_linear_blt(uint32_t *batch,
 	uint32_t *b = batch;
 	int height = length / (16 * 1024);
 
-	assert(height <= 1<<16);
+	igt_assert(height <= 1<<16);
 
 	if (height) {
-		b[0] = COPY_BLT_CMD | BLT_WRITE_ALPHA | BLT_WRITE_RGB;
-		b[1] = 0xcc << 16 | 1 << 25 | 1 << 24 | (16*1024);
-		b[2] = 0;
-		b[3] = height << 16 | (4*1024);
-		b[4] = 0;
+		int i = 0;
+		b[i++] = COPY_BLT_CMD | BLT_WRITE_ALPHA | BLT_WRITE_RGB;
+		if (intel_gen(intel_get_drm_devid(fd)) >= 8)
+			b[i-1]+=2;
+		b[i++] = 0xcc << 16 | 1 << 25 | 1 << 24 | (16*1024);
+		b[i++] = 0;
+		b[i++] = height << 16 | (4*1024);
+		b[i++] = 0;
 		reloc->offset = (b-batch+4) * sizeof(uint32_t);
 		reloc->delta = 0;
 		reloc->target_handle = dst;
@@ -76,28 +78,37 @@ static int gem_linear_blt(uint32_t *batch,
 		reloc->write_domain = I915_GEM_DOMAIN_RENDER;
 		reloc->presumed_offset = 0;
 		reloc++;
+		if (intel_gen(intel_get_drm_devid(fd)) >= 8)
+			b[i++] = 0; /* FIXME */
 
-		b[5] = 0;
-		b[6] = 16*1024;
-		b[7] = 0;
+		b[i++] = 0;
+		b[i++] = 16*1024;
+		b[i++] = 0;
 		reloc->offset = (b-batch+7) * sizeof(uint32_t);
+		if (intel_gen(intel_get_drm_devid(fd)) >= 8)
+			reloc->offset += sizeof(uint32_t);
 		reloc->delta = 0;
 		reloc->target_handle = src;
 		reloc->read_domains = I915_GEM_DOMAIN_RENDER;
 		reloc->write_domain = 0;
 		reloc->presumed_offset = 0;
 		reloc++;
+		if (intel_gen(intel_get_drm_devid(fd)) >= 8)
+			b[i++] = 0; /* FIXME */
 
-		b += 8;
+		b += i;
 		length -= height * 16*1024;
 	}
-	
+
 	if (length) {
-		b[0] = COPY_BLT_CMD | BLT_WRITE_ALPHA | BLT_WRITE_RGB;
-		b[1] = 0xcc << 16 | 1 << 25 | 1 << 24 | (16*1024);
-		b[2] = height << 16;
-		b[3] = (1+height) << 16 | (length / 4);
-		b[4] = 0;
+		int i = 0;
+		b[i++] = COPY_BLT_CMD | BLT_WRITE_ALPHA | BLT_WRITE_RGB;
+		if (intel_gen(intel_get_drm_devid(fd)) >= 8)
+			b[i-1]+=2;
+		b[i++] = 0xcc << 16 | 1 << 25 | 1 << 24 | (16*1024);
+		b[i++] = height << 16;
+		b[i++] = (1+height) << 16 | (length / 4);
+		b[i++] = 0;
 		reloc->offset = (b-batch+4) * sizeof(uint32_t);
 		reloc->delta = 0;
 		reloc->target_handle = dst;
@@ -105,38 +116,31 @@ static int gem_linear_blt(uint32_t *batch,
 		reloc->write_domain = I915_GEM_DOMAIN_RENDER;
 		reloc->presumed_offset = 0;
 		reloc++;
+		if (intel_gen(intel_get_drm_devid(fd)) >= 8)
+			b[i++] = 0; /* FIXME */
 
-		b[5] = height << 16;
-		b[6] = 16*1024;
-		b[7] = 0;
+		b[i++] = height << 16;
+		b[i++] = 16*1024;
+		b[i++] = 0;
 		reloc->offset = (b-batch+7) * sizeof(uint32_t);
+		if (intel_gen(intel_get_drm_devid(fd)) >= 8)
+			reloc->offset += sizeof(uint32_t);
 		reloc->delta = 0;
 		reloc->target_handle = src;
 		reloc->read_domains = I915_GEM_DOMAIN_RENDER;
 		reloc->write_domain = 0;
 		reloc->presumed_offset = 0;
 		reloc++;
+		if (intel_gen(intel_get_drm_devid(fd)) >= 8)
+			b[i++] = 0; /* FIXME */
 
-		b += 8;
+		b += i;
 	}
 
 	b[0] = MI_BATCH_BUFFER_END;
 	b[1] = 0;
 
 	return (b+2 - batch) * sizeof(uint32_t);
-}
-
-static int gem_exec(int fd, struct drm_i915_gem_execbuffer2 *execbuf, int loops)
-{
-	int ret = 0;
-
-	while (loops-- && ret == 0) {
-		ret = drmIoctl(fd,
-			       DRM_IOCTL_I915_GEM_EXECBUFFER2,
-			       execbuf);
-	}
-
-	return ret;
 }
 
 static double elapsed(const struct timeval *start,
@@ -181,7 +185,7 @@ static void run(int object_size)
 	src = gem_create(fd, object_size);
 	dst = gem_create(fd, object_size);
 
-	len = gem_linear_blt(buf, src, dst, object_size, reloc);
+	len = gem_linear_blt(fd, buf, src, dst, object_size, reloc);
 	gem_write(fd, handle, 0, buf, len);
 
 	exec[0].handle = src;
@@ -203,7 +207,10 @@ static void run(int object_size)
 	exec[1].rsvd2 = 0;
 
 	exec[2].handle = handle;
-	exec[2].relocation_count = len > 40 ? 4 : 2;
+	if (intel_gen(intel_get_drm_devid(fd)) >= 8)
+		exec[2].relocation_count = len > 56 ? 4 : 2;
+	else
+		exec[2].relocation_count = len > 40 ? 4 : 2;
 	exec[2].relocs_ptr = (uintptr_t)reloc;
 	exec[2].alignment = 0;
 	exec[2].offset = 0;
@@ -227,18 +234,18 @@ static void run(int object_size)
 	i915_execbuffer2_set_context_id(execbuf, 0);
 	execbuf.rsvd2 = 0;
 
-	for (count = 1; count <= 1<<17; count <<= 1) {
+	for (count = 1; count <= 1<<12; count <<= 1) {
 		struct timeval start, end;
 
 		gettimeofday(&start, NULL);
-		if (gem_exec(fd, &execbuf, count))
-			exit(1);
+		for (int loop = 0; loop < count; loop++)
+			gem_execbuf(fd, &execbuf);
 		gem_sync(fd, handle);
 		gettimeofday(&end, NULL);
-		printf("Time to blt %d bytes x %6d:	%7.3fµs, %s\n",
-		       object_size, count,
-		       elapsed(&start, &end, count),
-		       bytes_per_sec((char *)buf, object_size/elapsed(&start, &end, count)*1e6));
+		igt_info("Time to blt %d bytes x %6d:	%7.3fµs, %s\n",
+			 object_size, count,
+			 elapsed(&start, &end, count),
+			 bytes_per_sec((char *)buf, object_size/elapsed(&start, &end, count)*1e6));
 		fflush(stdout);
 	}
 	gem_close(fd, handle);
@@ -249,6 +256,10 @@ static void run(int object_size)
 int main(int argc, char **argv)
 {
 	int i;
+
+	igt_simple_init();
+
+	igt_skip_on_simulation();
 
 	if (argc > 1) {
 		for (i = 1; i < argc; i++) {

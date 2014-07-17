@@ -370,166 +370,15 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define IPEIR                  0x2088
 #define IPEHR                  0x208C
 
-#define INST_DONE                0x2090
-# define IDCT_DONE			(1 << 30)
-# define IQ_DONE			(1 << 29)
-# define PR_DONE			(1 << 28)
-# define VLD_DONE			(1 << 27)
-# define IP_DONE			(1 << 26)
-# define FBC_DONE			(1 << 25)
-# define BINNER_DONE			(1 << 24)
-# define SF_DONE			(1 << 23)
-# define SE_DONE			(1 << 22)
-# define WM_DONE			(1 << 21)
-# define IZ_DONE			(1 << 20)
-# define PERSPECTIVE_INTERP_DONE	(1 << 19)
-# define DISPATCHER_DONE		(1 << 18)
-# define PROJECTION_DONE		(1 << 17)
-# define DEPENDENT_ADDRESS_DONE		(1 << 16)
-# define QUAD_CACHE_DONE		(1 << 15)
-# define TEXTURE_FETCH_DONE		(1 << 14)
-# define TEXTURE_DECOMPRESS_DONE	(1 << 13)
-# define SAMPLER_CACHE_DONE		(1 << 12)
-# define FILTER_DONE			(1 << 11)
-# define BYPASS_FIFO_DONE		(1 << 10)
-# define PS_DONE			(1 << 9)
-# define CC_DONE			(1 << 8)
-# define MAP_FILTER_DONE		(1 << 7)
-# define MAP_L2_IDLE			(1 << 6)
-# define RING_2_ENABLE			(1 << 2)
-# define RING_1_ENABLE			(1 << 1)
-# define RING_0_ENABLE			(1 << 0)
-
-# define I830_GMBUS_DONE		(1 << 26)
-# define I830_FBC_DONE			(1 << 25)
-# define I830_BINNER_DONE		(1 << 24)
-# define I830_MPEG_DONE			(1 << 23)
-# define I830_MECO_DONE			(1 << 22)
-# define I830_MCD_DONE			(1 << 21)
-# define I830_MCSTP_DONE		(1 << 20)
-# define I830_CC_DONE			(1 << 19)
-# define I830_DG_DONE			(1 << 18)
-# define I830_DCMP_DONE			(1 << 17)
-# define I830_FTCH_DONE			(1 << 16)
-# define I830_IT_DONE			(1 << 15)
-# define I830_MG_DONE			(1 << 14)
-# define I830_MEC_DONE			(1 << 13)
-# define I830_PC_DONE			(1 << 12)
-# define I830_QCC_DONE			(1 << 11)
-# define I830_TB_DONE			(1 << 10)
-# define I830_WM_DONE			(1 << 9)
-# define I830_EF_DONE			(1 << 8)
-# define I830_BLITTER_DONE		(1 << 7)
-# define I830_MAP_L2_DONE		(1 << 6)
-# define I830_SECONDARY_RING_3_DONE	(1 << 5)
-# define I830_SECONDARY_RING_2_DONE	(1 << 4)
-# define I830_SECONDARY_RING_1_DONE	(1 << 3)
-# define I830_SECONDARY_RING_0_DONE	(1 << 2)
-# define I830_PRIMARY_RING_1_DONE	(1 << 1)
-# define I830_PRIMARY_RING_0_DONE	(1 << 0)
-
+#define INSTDONE                0x2090
 #define NOP_ID                   0x2094
 
 #define SCPD0                    0x209c	/* debug */
 #define INST_PS                  0x20c4
 #define IPEIR_I965                  0x2064 /* i965 */
 #define IPEHR_I965                  0x2068 /* i965 */
-#define INST_DONE_I965              0x206c
-# define I965_ROW_0_EU_0_DONE		(1 << 31)
-# define I965_ROW_0_EU_1_DONE		(1 << 30)
-# define I965_ROW_0_EU_2_DONE		(1 << 29)
-# define I965_ROW_0_EU_3_DONE		(1 << 28)
-# define I965_ROW_1_EU_0_DONE		(1 << 27)
-# define I965_ROW_1_EU_1_DONE		(1 << 26)
-# define I965_ROW_1_EU_2_DONE		(1 << 25)
-# define I965_ROW_1_EU_3_DONE		(1 << 24)
-# define I965_SF_DONE			(1 << 23)
-# define I965_SE_DONE			(1 << 22)
-# define I965_WM_DONE			(1 << 21)
-# define I965_DISPATCHER_DONE		(1 << 18)
-# define I965_PROJECTION_DONE		(1 << 17)
-# define I965_DG_DONE			(1 << 16)
-# define I965_QUAD_CACHE_DONE		(1 << 15)
-# define I965_TEXTURE_FETCH_DONE	(1 << 14)
-# define I965_TEXTURE_DECOMPRESS_DONE	(1 << 13)
-# define I965_SAMPLER_CACHE_DONE	(1 << 12)
-# define I965_FILTER_DONE		(1 << 11)
-# define I965_BYPASS_DONE		(1 << 10)
-# define I965_PS_DONE			(1 << 9)
-# define I965_CC_DONE			(1 << 8)
-# define I965_MAP_FILTER_DONE		(1 << 7)
-# define I965_MAP_L2_IDLE		(1 << 6)
-# define I965_MA_ROW_0_DONE		(1 << 5)
-# define I965_MA_ROW_1_DONE		(1 << 4)
-# define I965_IC_ROW_0_DONE		(1 << 3)
-# define I965_IC_ROW_1_DONE		(1 << 2)
-# define I965_CP_DONE			(1 << 1)
-# define I965_RING_0_ENABLE		(1 << 0)
-
-# define ILK_ROW_0_EU_0_DONE		(1 << 31)
-# define ILK_ROW_0_EU_1_DONE		(1 << 30)
-# define ILK_ROW_0_EU_2_DONE		(1 << 29)
-# define ILK_ROW_0_EU_3_DONE		(1 << 28)
-# define ILK_ROW_1_EU_0_DONE		(1 << 27)
-# define ILK_ROW_1_EU_1_DONE		(1 << 26)
-# define ILK_ROW_1_EU_2_DONE		(1 << 25)
-# define ILK_ROW_1_EU_3_DONE		(1 << 24)
-# define ILK_ROW_2_EU_0_DONE		(1 << 23)
-# define ILK_ROW_2_EU_1_DONE		(1 << 22)
-# define ILK_ROW_2_EU_2_DONE		(1 << 21)
-# define ILK_ROW_2_EU_3_DONE		(1 << 20)
-# define ILK_VCP_DONE			(1 << 19)
-# define ILK_ROW_0_MATH_DONE		(1 << 18)
-# define ILK_ROW_1_MATH_DONE		(1 << 17)
-# define ILK_ROW_2_MATH_DONE		(1 << 16)
-# define ILK_VC1_DONE			(1 << 15)
-# define ILK_ROW_0_MA_DONE		(1 << 14)
-# define ILK_ROW_1_MA_DONE		(1 << 13)
-# define ILK_ROW_2_MA_DONE		(1 << 12)
-# define ILK_ROW_0_ISC_DONE		(1 << 11)
-# define ILK_ROW_1_ISC_DONE		(1 << 10)
-# define ILK_ROW_2_ISC_DONE		(1 << 9)
-# define ILK_VFE_DONE			(1 << 8)
-# define ILK_TD_DONE			(1 << 7)
-# define ILK_SVTS_DONE			(1 << 6)
-# define ILK_TS_DONE			(1 << 5)
-# define ILK_GW_DONE			(1 << 4)
-# define ILK_AI_DONE			(1 << 3)
-# define ILK_AC_DONE			(1 << 2)
-# define ILK_AM_DONE			(1 << 1)
-
+#define INSTDONE_I965              0x206c
 #define GEN6_INSTDONE_1		0x206c
-# define GEN6_MA_3_DONE			(1 << 31)
-# define GEN6_EU_32_DONE		(1 << 30)
-# define GEN6_EU_31_DONE		(1 << 29)
-# define GEN6_EU_30_DONE		(1 << 28)
-# define GEN6_MA_2_DONE			(1 << 27)
-# define GEN6_EU_22_DONE		(1 << 26)
-# define GEN6_EU_21_DONE		(1 << 25)
-# define GEN6_EU_20_DONE		(1 << 24)
-# define GEN6_MA_1_DONE			(1 << 23)
-# define GEN6_EU_12_DONE		(1 << 22)
-# define GEN6_EU_11_DONE		(1 << 21)
-# define GEN6_EU_10_DONE		(1 << 20)
-# define GEN6_MA_0_DONE			(1 << 19)
-# define GEN6_EU_02_DONE		(1 << 18)
-# define GEN6_EU_01_DONE		(1 << 17)
-# define GEN6_EU_00_DONE		(1 << 16)
-# define GEN6_IC_3_DONE			(1 << 15)
-# define GEN6_IC_2_DONE			(1 << 14)
-# define GEN6_IC_1_DONE			(1 << 13)
-# define GEN6_IC_0_DONE			(1 << 12)
-# define GEN6_ISC_10_DONE		(1 << 11)
-# define GEN6_ISC_32_DONE		(1 << 10)
-# define GEN6_VSC_DONE			(1 << 9)
-# define GEN6_IEF_DONE			(1 << 8)
-# define GEN6_VFE_DONE			(1 << 7)
-# define GEN6_TD_DONE			(1 << 6)
-# define GEN6_TS_DONE			(1 << 4)
-# define GEN6_GW_DONE			(1 << 3)
-# define GEN6_HIZ_DONE			(1 << 2)
-# define GEN6_AVS_DONE			(1 << 1)
-
 #define INST_PS_I965                0x2070
 
 /* Current active ring head address: 
@@ -541,94 +390,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  */
 #define DMA_FADD_P             0x2078
 #define DMA_FADD_S               0x20d4
-#define INST_DONE_1              0x207c
-# define I965_GW_CS_DONE_CR		(1 << 19)
-# define I965_SVSM_CS_DONE_CR		(1 << 18)
-# define I965_SVDW_CS_DONE_CR		(1 << 17)
-# define I965_SVDR_CS_DONE_CR		(1 << 16)
-# define I965_SVRW_CS_DONE_CR		(1 << 15)
-# define I965_SVRR_CS_DONE_CR		(1 << 14)
-# define I965_SVTW_CS_DONE_CR		(1 << 13)
-# define I965_MASM_CS_DONE_CR		(1 << 12)
-# define I965_MASF_CS_DONE_CR		(1 << 11)
-# define I965_MAW_CS_DONE_CR		(1 << 10)
-# define I965_EM1_CS_DONE_CR		(1 << 9)
-# define I965_EM0_CS_DONE_CR		(1 << 8)
-# define I965_UC1_CS_DONE		(1 << 7)
-# define I965_UC0_CS_DONE		(1 << 6)
-# define I965_URB_CS_DONE		(1 << 5)
-# define I965_ISC_CS_DONE		(1 << 4)
-# define I965_CL_CS_DONE		(1 << 3)
-# define I965_GS_CS_DONE		(1 << 2)
-# define I965_VS0_CS_DONE		(1 << 1)
-# define I965_VF_CS_DONE		(1 << 0)
-
-# define G4X_BCS_DONE			(1 << 31)
-# define G4X_CS_DONE			(1 << 30)
-# define G4X_MASF_DONE			(1 << 29)
-# define G4X_SVDW_DONE			(1 << 28)
-# define G4X_SVDR_DONE			(1 << 27)
-# define G4X_SVRW_DONE			(1 << 26)
-# define G4X_SVRR_DONE			(1 << 25)
-# define G4X_ISC_DONE			(1 << 24)
-# define G4X_MT_DONE			(1 << 23)
-# define G4X_RC_DONE			(1 << 22)
-# define G4X_DAP_DONE			(1 << 21)
-# define G4X_MAWB_DONE			(1 << 20)
-# define G4X_MT_IDLE			(1 << 19)
-# define G4X_GBLT_BUSY			(1 << 18)
-# define G4X_SVSM_DONE			(1 << 17)
-# define G4X_MASM_DONE			(1 << 16)
-# define G4X_QC_DONE			(1 << 15)
-# define G4X_FL_DONE			(1 << 14)
-# define G4X_SC_DONE			(1 << 13)
-# define G4X_DM_DONE			(1 << 12)
-# define G4X_FT_DONE			(1 << 11)
-# define G4X_DG_DONE			(1 << 10)
-# define G4X_SI_DONE			(1 << 9)
-# define G4X_SO_DONE			(1 << 8)
-# define G4X_PL_DONE			(1 << 7)
-# define G4X_WIZ_DONE			(1 << 6)
-# define G4X_URB_DONE			(1 << 5)
-# define G4X_SF_DONE			(1 << 4)
-# define G4X_CL_DONE			(1 << 3)
-# define G4X_GS_DONE			(1 << 2)
-# define G4X_VS0_DONE			(1 << 1)
-# define G4X_VF_DONE			(1 << 0)
-
+#define INSTDONE_1              0x207c
 #define GEN6_INSTDONE_2		0x207c
-# define GEN6_GAM_DONE			(1 << 31)
-# define GEN6_CS_DONE			(1 << 30)
-# define GEN6_WMBE_DONE			(1 << 29)
-# define GEN6_SVRW_DONE			(1 << 28)
-# define GEN6_RCC_DONE			(1 << 27)
-# define GEN6_SVG_DONE			(1 << 26)
-# define GEN6_ISC_DONE			(1 << 25)
-# define GEN6_MT_DONE			(1 << 24)
-# define GEN6_RCPFE_DONE		(1 << 23)
-# define GEN6_RCPBE_DONE		(1 << 22)
-# define GEN6_VDI_DONE			(1 << 21)
-# define GEN6_RCZ_DONE			(1 << 20)
-# define GEN6_DAP_DONE			(1 << 19)
-# define GEN6_PSD_DONE			(1 << 18)
-# define GEN6_IZ_DONE			(1 << 17)
-# define GEN6_WMFE_DONE			(1 << 16)
-# define GEN6_SVSM_DONE			(1 << 15)
-# define GEN6_QC_DONE			(1 << 14)
-# define GEN6_FL_DONE			(1 << 13)
-# define GEN6_SC_DONE			(1 << 12)
-# define GEN6_DM_DONE			(1 << 11)
-# define GEN6_FT_DONE			(1 << 10)
-# define GEN6_DG_DONE			(1 << 9)
-# define GEN6_SI_DONE			(1 << 8)
-# define GEN6_SO_DONE			(1 << 7)
-# define GEN6_PL_DONE			(1 << 6)
-# define GEN6_VME_DONE			(1 << 5)
-# define GEN6_SF_DONE			(1 << 4)
-# define GEN6_CL_DONE			(1 << 3)
-# define GEN6_GS_DONE			(1 << 2)
-# define GEN6_VS0_DONE			(1 << 1)
-# define GEN6_VF_DONE			(1 << 0)
 
 #define CACHE_MODE_0           0x2120
 #define CACHE_MODE_1           0x2124
@@ -800,6 +563,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define FENCE_PITCH_64	    0x00000060
 #define FENCE_VALID         0x00000001
 
+#define FENCE_REG_SANDYBRIDGE_0		0x100000
 
 /* Registers to control page table, p274
  */
@@ -1105,6 +869,14 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PIPECSRC	0x6201c
 #define BCLRPAT_C	0x62020
 #define VSYNCSHIFT_C	0x62028
+
+#define HTOTAL_EDP	0x6F000
+#define HBLANK_EDP	0x6F004
+#define HSYNC_EDP	0x6F008
+#define VTOTAL_EDP	0x6F00c
+#define VBLANK_EDP	0x6F010
+#define VSYNC_EDP	0x6F014
+#define VSYNCSHIFT_EDP	0x6F028
 
 #define PP_STATUS	0x61200
 # define PP_ON					(1 << 31)
@@ -1577,6 +1349,9 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define ADPA_HSYNC_ACTIVE_HIGH	(1<<3)
 #define ADPA_HSYNC_ACTIVE_LOW	0
 
+#define PCH_DSP_CHICKEN1	0x42000
+#define PCH_DSP_CHICKEN2	0x42004
+#define PCH_DSP_CHICKEN3	0x4200c
 #define PCH_DSPCLK_GATE_D	0x42020
 #define PCH_DSPRAMCLK_GATE_D	0x42024
 #define PCH_3DCGDIS0		0x46020
@@ -2437,6 +2212,9 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 # define VBLANK_INT_STATUS	(1 << 1)
 # define OREG_UPDATE_STATUS	(1 << 0)
 				 
+#define FW_BLC		0x020d8
+#define FW_BLC2		0x020dc
+#define FW_BLC_SELF	0x020e0 /* 915+ only */
 
 #define DSPARB			0x70030
 #define   DSPARB_CSTART_SHIFT	7
@@ -2537,6 +2315,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PIPEC_GMCH_DATA_N	0x72054
 #define PIPEC_DP_LINK_M		0x72060
 #define PIPEC_DP_LINK_N		0x72064
+
+#define PIPEEDPCONF		0x7F008
 
 #define DSPACNTR		0x70180
 #define DSPBCNTR		0x71180
@@ -2692,14 +2472,14 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define COLOR_BLT_WRITE_ALPHA	(1<<21)
 #define COLOR_BLT_WRITE_RGB	(1<<20)
 
-#define XY_COLOR_BLT_CMD		((2<<29)|(0x50<<22)|(0x4))
+#define XY_COLOR_BLT_CMD_NOLEN		((2<<29)|(0x50<<22))
 #define XY_COLOR_BLT_WRITE_ALPHA	(1<<21)
 #define XY_COLOR_BLT_WRITE_RGB		(1<<20)
 #define XY_COLOR_BLT_TILED		(1<<11)
 
 #define XY_SETUP_CLIP_BLT_CMD		((2<<29)|(3<<22)|1)
 
-#define XY_SRC_COPY_BLT_CMD		((2<<29)|(0x53<<22)|6)
+#define XY_SRC_COPY_BLT_CMD		((2<<29)|(0x53<<22))
 #define XY_SRC_COPY_BLT_WRITE_ALPHA	(1<<21)
 #define XY_SRC_COPY_BLT_WRITE_RGB	(1<<20)
 #define XY_SRC_COPY_BLT_SRC_TILED	(1<<15)
@@ -3028,6 +2808,12 @@ typedef enum {
 #define PIPEC_LINK_M2		0x62048
 #define PIPEC_LINK_N2		0x6204c
 
+#define PIPEEDP_DATA_M1		0x6F030
+#define PIPEEDP_DATA_N1		0x6F034
+
+#define PIPEEDP_LINK_M1		0x6F040
+#define PIPEEDP_LINK_N1		0x6F044
+
 /* PIPECONF for pipe A/B addr is same */
 
 /* cusor A is only connected to pipe A,
@@ -3341,6 +3127,12 @@ typedef enum {
 #define  FDI_SCRAMBLING_ENABLE		(0<<7)
 #define  FDI_SCRAMBLING_DISABLE		(1<<7)
 
+/* Additional cpu TX control regs, from ivb bspec */
+#define DPAFE_BMFUNC		0x6c024
+#define DPAFE_DL_IREFCAL0	0x6c02c
+#define DPAFE_DL_IREFCAL1	0x6c030
+#define DPAFE_DP_IREFCAL	0x6c034
+
 /* FDI_RX, FDI_X is hard-wired to Transcoder_X */
 #define FDI_RXA_CTL		0xf000c
 #define FDI_RXB_CTL		0xf100c
@@ -3450,11 +3242,17 @@ typedef enum {
 #define HDMID	0xe1160
 #define PCH_LVDS		0xe1180
 
+/* Since IVB, the old _CTL2 is now _CTL and the old _CTL is now _DATA. */
 #define BLC_PWM_CPU_CTL2        0x48250
+#define BLC_PWM2_CPU_CTL2       0x48350
 #define  PWM_ENABLE             (1 << 31)
 #define  PWM_PIPE_A             (0 << 29)
 #define  PWM_PIPE_B             (1 << 29)
 #define BLC_PWM_CPU_CTL         0x48254
+#define BLC_PWM2_CPU_CTL        0x48354
+#define BLC_MISC_CTL            0x48360
+
+#define UTIL_PIN_CTL            0x48400
 
 #define BLC_PWM_PCH_CTL1        0xc8250
 #define  PWM_PCH_ENABLE         (1 << 31)
@@ -3592,8 +3390,8 @@ typedef enum {
 #define HSW_PWR_WELL_CTL2			0x45404		/* Driver */
 #define HSW_PWR_WELL_CTL3			0x45408		/* KVMR */
 #define HSW_PWR_WELL_CTL4			0x4540C		/* Debug */
-#define   HSW_PWR_WELL_ENABLE			(1<<31)
-#define   HSW_PWR_WELL_STATE			(1<<30)
+#define   HSW_PWR_WELL_ENABLE_REQUEST		(1<<31)
+#define   HSW_PWR_WELL_STATE_ENABLED		(1<<30)
 #define HSW_PWR_WELL_CTL5			0x45410
 #define   HSW_PWR_WELL_ENABLE_SINGLE_STEP	(1<<31)
 #define   HSW_PWR_WELL_PWR_GATE_OVERRIDE	(1<<20)
@@ -3727,6 +3525,18 @@ typedef enum {
 #define  LCPLL_CD2X_CLOCK_DISABLE	(1<<23)
 
 /* Pipe WM_LINETIME - watermark line time */
+#define WM_PIPE_A			0x45100
+#define WM_PIPE_B			0x45104
+#define WM_PIPE_C			0x45200
+#define WM_LP1				0x45108
+#define WM_LP2				0x4510C
+#define WM_LP3				0x45110
+#define WM_LP1_SPR			0x45120
+#define WM_LP2_SPR			0x45124
+#define WM_LP3_SPR			0x45128
+#define WM_MISC				0x45260
+#define WM_SR_CNT			0x45264
+#define WM_DBG				0x45280
 #define PIPE_WM_LINETIME_A		0x45270
 #define PIPE_WM_LINETIME_B		0x45274
 #define PIPE_WM_LINETIME_C		0x45278
@@ -3742,17 +3552,29 @@ typedef enum {
 #define  SFUSE_STRAP_DDID_DETECTED	(1<<0)
 
 /* Valleyview related items */
+#define VLV_DISPLAY_BASE       0x180000
 
-/* Valleyview DPIO registers */
-#define VLV_DISPLAY_BASE	0x180000
-#define DPIO_PKT			0x2100
-#define  DPIO_RID			(0 << 24)
-#define  DPIO_OP_WRITE		(1 << 16)
-#define  DPIO_OP_READ		(0 << 16)
-#define  DPIO_PORTID		(0x12 << 8)
-#define  DPIO_BYTE			(0xf << 4)
-#define  DPIO_BUSY			(1 << 0)
-#define DPIO_DATA			0x2104
-#define DPIO_REG			0x2108
+/*
+ * IOSF sideband
+ */
+#define VLV_IOSF_DOORBELL_REQ			(VLV_DISPLAY_BASE + 0x2100)
+#define   IOSF_DEVFN_SHIFT			24
+#define   IOSF_OPCODE_SHIFT			16
+#define   IOSF_PORT_SHIFT			8
+#define   IOSF_BYTE_ENABLES_SHIFT		4
+#define   IOSF_BAR_SHIFT			1
+#define   IOSF_SB_BUSY				(1<<0)
+#define   IOSF_PORT_BUNIT			0x3
+#define   IOSF_PORT_PUNIT			0x4
+#define   IOSF_PORT_NC				0x11
+#define   IOSF_PORT_DPIO			0x12
+#define   IOSF_PORT_DPIO_2			0x1a
+#define   IOSF_PORT_GPIO_NC			0x13
+#define   IOSF_PORT_CCK				0x14
+#define   IOSF_PORT_CCU				0xA9
+#define   IOSF_PORT_GPS_CORE			0x48
+#define   IOSF_PORT_FLISDSI			0x1B
+#define VLV_IOSF_DATA				(VLV_DISPLAY_BASE + 0x2104)
+#define VLV_IOSF_ADDR				(VLV_DISPLAY_BASE + 0x2108)
 
 #endif /* _I810_REG_H */

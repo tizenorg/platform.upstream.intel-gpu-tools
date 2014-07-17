@@ -41,22 +41,53 @@
 #include <sys/stat.h>
 #include <sys/mman.h>
 
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "igt_debugfs.h"
+#include "intel_chipset.h"
 
+/**
+ * SECTION:intel_io
+ * @short_description: Register access and sideband I/O libraray
+ * @title: intel io
+ * @include: intel_io.h
+ *
+ * This library provides register I/O helpers in both a basic version and a more
+ * fancy version which also handles forcewak and can optionally check registers
+ * against a white-list. All register function are compatible. Hence the same
+ * code can be used to decode registers with either of them, or also from a dump
+ * file using intel_mmio_use_dump_file().
+ *
+ * Futhermore this library also provides helper functions for accessing the
+ * various sideband interfaces found on Valleyview/Baytrail based platforms.
+ */
+
+#define FAKEKEY 0x2468ace0
+
+/**
+ * mmio:
+ *
+ * Pointer to the register range. It is not recommended to use this directly.
+ */
 void *mmio;
 
 static struct _mmio_data {
 	int inited;
 	bool safe;
-	char debugfs_path[FILENAME_MAX];
-	char debugfs_forcewake_path[FILENAME_MAX];
 	uint32_t i915_devid;
 	struct intel_register_map map;
 	int key;
 } mmio_data;
 
+/**
+ * intel_mmio_use_dump_file:
+ * @file: name of the register dump file to open
+ *
+ * Sets up #mmio to point at the data contained in @file. This allows the same
+ * code to get reused for dumping and decoding from running hardwared as from
+ * register dumps.
+ */
 void
-intel_map_file(char *file)
+intel_mmio_use_dump_file(char *file)
 {
 	int fd;
 	struct stat st;
@@ -77,8 +108,18 @@ intel_map_file(char *file)
 	close(fd);
 }
 
+/**
+ * intel_mmio_use_pci_bar:
+ * @pci_dev: intel gracphis pci device
+ *
+ * Sets up #mmio to point at the data contained in @file. This allows the same
+ * code to get reused for dumping and decoding from running hardwared as from
+ * register dumps.
+ *
+ * @pci_dev can be obtained from intel_get_pci_device().
+ */
 void
-intel_get_mmio(struct pci_device *pci_dev)
+intel_mmio_use_pci_bar(struct pci_device *pci_dev)
 {
 	uint32_t devid, gen;
 	int mmio_bar, mmio_size;
@@ -92,7 +133,7 @@ intel_get_mmio(struct pci_device *pci_dev)
 
 	gen = intel_gen(devid);
 	if (gen < 3)
-		mmio_size = 64*1024;
+		mmio_size = 512*1024;
 	else if (gen < 5)
 		mmio_size = 512*1024;
 	else
@@ -111,53 +152,24 @@ intel_get_mmio(struct pci_device *pci_dev)
 	}
 }
 
-/*
- * If successful, i915_debugfs_path and i915_debugfs_forcewake_path are both
- * updated with the correct path.
- */
-static int
-find_debugfs_path(const char *dri_base)
-{
-	char buf[FILENAME_MAX];
-	struct stat sb;
-	int i, ret;
-
-	for (i = 0; i < 16; i++) {
-		snprintf(buf, FILENAME_MAX, "%s/%i/name", dri_base, i);
-
-		snprintf(mmio_data.debugfs_path, FILENAME_MAX,
-			 "%s/%i/", dri_base, i);
-		snprintf(mmio_data.debugfs_forcewake_path, FILENAME_MAX,
-			 "%s/%i/i915_forcewake_user", dri_base, i);
-
-		ret = stat(mmio_data.debugfs_forcewake_path, &sb);
-		if (ret) {
-			mmio_data.debugfs_path[0] = 0;
-			mmio_data.debugfs_forcewake_path[0] = 0;
-		} else
-			return 0;
-	}
-
-	return -1;
-}
-
-static int
-get_forcewake_lock(void)
-{
-	return open(mmio_data.debugfs_forcewake_path, 0);
-}
-
 static void
 release_forcewake_lock(int fd)
 {
 	close(fd);
 }
 
-/*
- * Initialize register access library.
- *
- * @pci_dev: pci device we're mucking with
+/**
+ * intel_register_access_init:
+ * @pci_dev: intel gracphis pci device
  * @safe: use safe register access tables
+ *
+ * This initializes the new register access library, which supports forcewake
+ * handling and also allows register access to be checked with an explicit
+ * whitelist.
+ *
+ * It also initializes #mmio like intel_mmio_use_pci_bar().
+ *
+ * @pci_dev can be obtained from intel_get_pci_device().
  */
 int
 intel_register_access_init(struct pci_device *pci_dev, int safe)
@@ -166,46 +178,76 @@ intel_register_access_init(struct pci_device *pci_dev, int safe)
 
 	/* after old API is deprecated, remove this */
 	if (mmio == NULL)
-		intel_get_mmio(pci_dev);
+		intel_mmio_use_pci_bar(pci_dev);
 
 	assert(mmio != NULL);
 
 	if (mmio_data.inited)
 		return -1;
 
-	mmio_data.safe = safe != 0 ? true : false;
+	mmio_data.safe = (safe != 0 &&
+			intel_gen(pci_dev->device_id) >= 4) ? true : false;
 	mmio_data.i915_devid = pci_dev->device_id;
 	if (mmio_data.safe)
 		mmio_data.map = intel_get_register_map(mmio_data.i915_devid);
 
-	if (!(IS_GEN6(pci_dev->device_id) ||
-	      IS_GEN7(pci_dev->device_id)))
-		goto done;
+	/* Find where the forcewake lock is. Forcewake doesn't exist
+	 * gen < 6, but the debugfs should do the right things for us.
+	 */
+	ret = igt_open_forcewake_handle();
+	if (ret == -1)
+		mmio_data.key = FAKEKEY;
+	else
+		mmio_data.key = ret;
 
-	/* Find where the forcewake lock is */
-	ret = find_debugfs_path("/sys/kernel/debug/dri");
-	if (ret) {
-		ret = find_debugfs_path("/debug/dri");
-		if (ret) {
-			fprintf(stderr, "Couldn't find path to dri/debugfs entry\n");
-			return ret;
-		}
-	}
-	mmio_data.key = get_forcewake_lock();
-
-done:
 	mmio_data.inited++;
 	return 0;
 }
 
+static int
+intel_register_access_needs_wake(void)
+{
+	return mmio_data.key != FAKEKEY;
+}
+
+/**
+ * intel_register_access_needs_fakewake:
+ *
+ * Returns:
+ * Non-zero when forcewake initialization failed.
+ */
+int intel_register_access_needs_fakewake(void)
+{
+	return mmio_data.key == FAKEKEY;
+}
+
+/**
+ * intel_register_access_fini:
+ *
+ * Clean up the register access helper initialized with
+ * intel_register_access_init().
+ */
 void
 intel_register_access_fini(void)
 {
-	if (mmio_data.key)
+	if (mmio_data.key && intel_register_access_needs_wake())
 		release_forcewake_lock(mmio_data.key);
 	mmio_data.inited--;
 }
 
+/**
+ * intel_register_read:
+ * @reg: register offset
+ *
+ * 32-bit read of the register at @offset. This function only works when the new
+ * register access helper is initialized with intel_register_access_init().
+ *
+ * Compared to INREG() it can do optional checking with the register access
+ * white lists.
+ *
+ * Returns:
+ * The value read from the register.
+ */
 uint32_t
 intel_register_read(uint32_t reg)
 {
@@ -237,6 +279,17 @@ out:
 	return ret;
 }
 
+/**
+ * intel_register_write:
+ * @reg: register offset
+ * @val: value to write
+ *
+ * 32-bit write to the register at @offset. This function only works when the new
+ * register access helper is initialized with intel_register_access_init().
+ *
+ * Compared to OUTRET() it can do optional checking with the register access
+ * white lists.
+ */
 void
 intel_register_write(uint32_t reg, uint32_t val)
 {
@@ -260,5 +313,38 @@ intel_register_write(uint32_t reg, uint32_t val)
 	}
 
 write_out:
+	*(volatile uint32_t *)((volatile char *)mmio + reg) = val;
+}
+
+
+/**
+ * INREG:
+ * @reg: register offset
+ *
+ * 32-bit read of the register at @offset. This function only works when the new
+ * register access helper is initialized with intel_register_access_init().
+ *
+ * This function directly accesses the #mmio without safety checks.
+ *
+ * Returns:
+ * The value read from the register.
+ */
+uint32_t INREG(uint32_t reg)
+{
+	return *(volatile uint32_t *)((volatile char *)mmio + reg);
+}
+
+/**
+ * OUTRET:
+ * @reg: register offset
+ * @val: value to write
+ *
+ * 32-bit write to the register at @offset. This function only works when the new
+ * register access helper is initialized with intel_register_access_init().
+ *
+ * This function directly accesses the #mmio without safety checks.
+ */
+void OUTREG(uint32_t reg, uint32_t val)
+{
 	*(volatile uint32_t *)((volatile char *)mmio + reg) = val;
 }

@@ -27,7 +27,9 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "i915_drm.h"
+#include <errno.h>
+
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 
 struct local_drm_i915_gem_context_create {
@@ -37,28 +39,22 @@ struct local_drm_i915_gem_context_create {
 
 #define CONTEXT_CREATE_IOCTL DRM_IOWR(DRM_COMMAND_BASE + 0x2d, struct local_drm_i915_gem_context_create)
 
-int main(int argc, char *argv[])
+igt_simple_main
 {
 	int ret, fd;
 	struct local_drm_i915_gem_context_create create;
 
+	igt_skip_on_simulation();
+
 	create.ctx_id = rand();
 	create.pad = rand();
 
-	fd = drm_open_any();
+	fd = drm_open_any_render();
 
 	ret = drmIoctl(fd, CONTEXT_CREATE_IOCTL, &create);
-	if (ret != 0 && (errno == ENODEV || errno == EINVAL)) {
-		fprintf(stderr, "Kernel is too old, or contexts not supported: %s\n",
-			strerror(errno));
-		exit(77);
-	} else if (ret != 0) {
-		fprintf(stderr, "%s\n", strerror(errno));
-		exit(EXIT_FAILURE);
-	}
-	assert(create.ctx_id != 0);
+	igt_skip_on(ret != 0 && (errno == ENODEV || errno == EINVAL));
+	igt_assert(ret == 0);
+	igt_assert(create.ctx_id != 0);
 
 	close(fd);
-
-	exit(EXIT_SUCCESS);
 }

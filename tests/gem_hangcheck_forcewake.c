@@ -28,18 +28,18 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 #include "intel_bufmgr.h"
 #include "intel_batchbuffer.h"
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
 
 /*
  * Testcase: Provoke the hangcheck timer on an otherwise idle system
@@ -58,12 +58,14 @@ struct intel_batchbuffer *batch;
 uint32_t blob[2048*2048];
 
 #define MAX_BLT_SIZE 128
-int main(int argc, char **argv)
+igt_simple_main
 {
 	drm_intel_bo *bo = NULL;
 	uint32_t tiling_mode = I915_TILING_X;
 	unsigned long pitch, act_size;
 	int fd, i, devid;
+
+	igt_skip_on_simulation();
 
 	memset(blob, 'A', sizeof(blob));
 
@@ -75,7 +77,7 @@ int main(int argc, char **argv)
 	batch = intel_batchbuffer_alloc(bufmgr, devid);
 
 	act_size = 2048;
-	printf("filling ring\n");
+	igt_info("filling ring\n");
 	drm_intel_bo_unreference(bo);
 	bo = drm_intel_bo_alloc_tiled(bufmgr, "tiled bo", act_size, act_size,
 				      4, &tiling_mode, &pitch, 0);
@@ -86,21 +88,20 @@ int main(int argc, char **argv)
 		pitch /= 4;
 
 	for (i = 0; i < 10000; i++) {
-		BEGIN_BATCH(8);
-		OUT_BATCH(XY_SRC_COPY_BLT_CMD |
-			  XY_SRC_COPY_BLT_WRITE_ALPHA |
-			  XY_SRC_COPY_BLT_WRITE_RGB |
-			  XY_SRC_COPY_BLT_SRC_TILED |
-			  XY_SRC_COPY_BLT_DST_TILED);
+		BLIT_COPY_BATCH_START(devid,
+				XY_SRC_COPY_BLT_SRC_TILED |
+				XY_SRC_COPY_BLT_DST_TILED);
 		OUT_BATCH((3 << 24) | /* 32 bits */
 			  (0xcc << 16) | /* copy ROP */
 			  pitch);
 		OUT_BATCH(0 << 16 | 1024);
 		OUT_BATCH((2048) << 16 | (2048));
 		OUT_RELOC_FENCED(bo, I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
+		BLIT_RELOC_UDW(devid);
 		OUT_BATCH(0 << 16 | 0);
 		OUT_BATCH(pitch);
 		OUT_RELOC_FENCED(bo, I915_GEM_DOMAIN_RENDER, 0, 0);
+		BLIT_RELOC_UDW(devid);
 		ADVANCE_BATCH();
 
 		if (IS_GEN6(devid) || IS_GEN7(devid)) {
@@ -112,16 +113,14 @@ int main(int argc, char **argv)
 		}
 	}
 
-	printf("waiting\n");
+	igt_info("waiting\n");
 	sleep(10);
 
-	printf("done waiting, check dmesg\n");
+	igt_info("done waiting, check dmesg\n");
 	drm_intel_bo_unreference(bo);
 
 	intel_batchbuffer_free(batch);
 	drm_intel_bufmgr_destroy(bufmgr);
 
 	close(fd);
-
-	return 0;
 }

@@ -28,18 +28,19 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include "drm.h"
-#include "i915_drm.h"
+
+#include <drm.h>
+
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
-#include "intel_bufmgr.h"
-#include "intel_batchbuffer.h"
-#include "intel_gpu_tools.h"
+#include "intel_chipset.h"
+#include "intel_io.h"
+#include "igt_aux.h"
 
 /*
  * Testcase: pwrite/pread consistency when touching partial cachelines
@@ -83,20 +84,18 @@ copy_bo(drm_intel_bo *src, int src_tiled,
 		cmd_bits |= XY_SRC_COPY_BLT_SRC_TILED;
 	}
 
-	BEGIN_BATCH(8);
-	OUT_BATCH(XY_SRC_COPY_BLT_CMD |
-		  XY_SRC_COPY_BLT_WRITE_ALPHA |
-		  XY_SRC_COPY_BLT_WRITE_RGB |
-		  cmd_bits);
+	BLIT_COPY_BATCH_START(devid, cmd_bits);
 	OUT_BATCH((3 << 24) | /* 32 bits */
 		  (0xcc << 16) | /* copy ROP */
 		  dst_pitch);
 	OUT_BATCH(0 << 16 | 0);
 	OUT_BATCH(BO_SIZE/scratch_pitch << 16 | 1024);
 	OUT_RELOC_FENCED(dst, I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
+	BLIT_RELOC_UDW(devid);
 	OUT_BATCH(0 << 16 | 0);
 	OUT_BATCH(src_pitch);
 	OUT_RELOC_FENCED(src, I915_GEM_DOMAIN_RENDER, 0, 0);
+	BLIT_RELOC_UDW(devid);
 	ADVANCE_BATCH();
 
 	intel_batchbuffer_flush(batch);
@@ -118,45 +117,20 @@ blt_bo_fill(drm_intel_bo *tmp_bo, drm_intel_bo *bo, int val)
 
 	if (bo->offset < mappable_gtt_limit &&
 	    (IS_G33(devid) || intel_gen(devid) >= 4))
-		drmtest_trash_aperture();
+		igt_trash_aperture();
 
 	copy_bo(tmp_bo, 0, bo, 1);
 }
 
 #define MAX_BLT_SIZE 128
 #define ROUNDS 200
-int main(int argc, char **argv)
+uint8_t tmp[BO_SIZE];
+uint8_t compare_tmp[BO_SIZE];
+
+static void test_partial_reads(void)
 {
 	int i, j;
-	uint8_t tmp[BO_SIZE];
-	uint8_t compare_tmp[BO_SIZE];
-	uint32_t tiling_mode = I915_TILING_X;
 
-	srandom(0xdeadbeef);
-
-	fd = drm_open_any();
-
-	bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
-	//drm_intel_bufmgr_gem_enable_reuse(bufmgr);
-	devid = intel_get_drm_devid(fd);
-	batch = intel_batchbuffer_alloc(bufmgr, devid);
-
-	/* overallocate the buffers we're actually using because */
-	scratch_bo = drm_intel_bo_alloc_tiled(bufmgr, "scratch bo", 1024, 
-					      BO_SIZE/4096, 4,
-					      &tiling_mode, &scratch_pitch, 0);
-	assert(tiling_mode == I915_TILING_X);
-	assert(scratch_pitch == 4096);
-	staging_bo = drm_intel_bo_alloc(bufmgr, "staging bo", BO_SIZE, 4096);
-	tiled_staging_bo = drm_intel_bo_alloc_tiled(bufmgr, "scratch bo", 1024,
-						    BO_SIZE/4096, 4,
-						    &tiling_mode,
-						    &scratch_pitch, 0);
-
-	drmtest_init_aperture_trashers(bufmgr);
-	mappable_gtt_limit = gem_mappable_aperture_size();
-
-	printf("checking partial reads\n");
 	for (i = 0; i < ROUNDS; i++) {
 		int start, len;
 		int val = i % 256;
@@ -168,17 +142,19 @@ int main(int argc, char **argv)
 
 		drm_intel_bo_get_subdata(scratch_bo, start, len, tmp);
 		for (j = 0; j < len; j++) {
-			if (tmp[j] != val) {
-				printf("mismatch at %i, got: %i, expected: %i\n",
-				       start + j, tmp[j], val);
-				exit(1);
-			}
+			igt_assert_f(tmp[j] == val,
+				     "mismatch at %i, got: %i, expected: %i\n",
+				     start + j, tmp[j], val);
 		}
 
-		drmtest_progress("partial reads test: ", i, ROUNDS);
+		igt_progress("partial reads test: ", i, ROUNDS);
 	}
+}
 
-	printf("checking partial writes\n");
+static void test_partial_writes(void)
+{
+	int i, j;
+
 	for (i = 0; i < ROUNDS; i++) {
 		int start, len;
 		int val = i % 256;
@@ -197,32 +173,30 @@ int main(int argc, char **argv)
 					 compare_tmp);
 
 		for (j = 0; j < start; j++) {
-			if (compare_tmp[j] != val) {
-				printf("amismatch at %i, got: %i, expected: %i\n",
-				       j, tmp[j], val);
-				exit(1);
-			}
+			igt_assert_f(compare_tmp[j] == val,
+				     "mismatch at %i, got: %i, expected: %i\n",
+				     j, tmp[j], val);
 		}
 		for (; j < start + len; j++) {
-			if (compare_tmp[j] != tmp[0]) {
-				printf("bmismatch at %i, got: %i, expected: %i\n",
-				       j, tmp[j], i);
-				exit(1);
-			}
+			igt_assert_f(compare_tmp[j] == tmp[0],
+				     "mismatch at %i, got: %i, expected: %i\n",
+				     j, tmp[j], i);
 		}
 		for (; j < BO_SIZE; j++) {
-			if (compare_tmp[j] != val) {
-				printf("cmismatch at %i, got: %i, expected: %i\n",
-				       j, tmp[j], val);
-				exit(1);
-			}
+			igt_assert_f(compare_tmp[j] == val,
+				     "mismatch at %i, got: %i, expected: %i\n",
+				     j, tmp[j], val);
 		}
 		drm_intel_gem_bo_unmap_gtt(staging_bo);
 
-		drmtest_progress("partial writes test: ", i, ROUNDS);
+		igt_progress("partial writes test: ", i, ROUNDS);
 	}
+}
 
-	printf("checking partial writes after partial reads\n");
+static void test_partial_read_writes(void)
+{
+	int i, j;
+
 	for (i = 0; i < ROUNDS; i++) {
 		int start, len;
 		int val = i % 256;
@@ -235,11 +209,9 @@ int main(int argc, char **argv)
 
 		drm_intel_bo_get_subdata(scratch_bo, start, len, tmp);
 		for (j = 0; j < len; j++) {
-			if (tmp[j] != val) {
-				printf("mismatch in read at %i, got: %i, expected: %i\n",
-				       start + j, tmp[j], val);
-				exit(1);
-			}
+			igt_assert_f(tmp[j] == val,
+				     "mismatch in read at %i, got: %i, expected: %i\n",
+				     start + j, tmp[j], val);
 		}
 
 		/* Change contents through gtt to make the pread cachelines
@@ -260,35 +232,71 @@ int main(int argc, char **argv)
 					 compare_tmp);
 
 		for (j = 0; j < start; j++) {
-			if (compare_tmp[j] != val) {
-				printf("mismatch at %i, got: %i, expected: %i\n",
-				       j, tmp[j], val);
-				exit(1);
-			}
+			igt_assert_f(compare_tmp[j] == val,
+				     "mismatch at %i, got: %i, expected: %i\n",
+				     j, tmp[j], val);
 		}
 		for (; j < start + len; j++) {
-			if (compare_tmp[j] != tmp[0]) {
-				printf("mismatch at %i, got: %i, expected: %i\n",
-				       j, tmp[j], tmp[0]);
-				exit(1);
-			}
+			igt_assert_f(compare_tmp[j] == tmp[0],
+				     "mismatch at %i, got: %i, expected: %i\n",
+				     j, tmp[j], tmp[0]);
 		}
 		for (; j < BO_SIZE; j++) {
-			if (compare_tmp[j] != val) {
-				printf("mismatch at %i, got: %i, expected: %i\n",
-				       j, tmp[j], val);
-				exit(1);
-			}
+			igt_assert_f(compare_tmp[j] == val,
+				     "mismatch at %i, got: %i, expected: %i\n",
+				     j, tmp[j], val);
 		}
 		drm_intel_gem_bo_unmap_gtt(staging_bo);
 
-		drmtest_progress("partial read/writes test: ", i, ROUNDS);
+		igt_progress("partial read/writes test: ", i, ROUNDS);
+	}
+}
+
+igt_main
+{
+	uint32_t tiling_mode = I915_TILING_X;
+
+	igt_skip_on_simulation();
+
+	srandom(0xdeadbeef);
+
+	igt_fixture {
+		fd = drm_open_any();
+
+		bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
+		//drm_intel_bufmgr_gem_enable_reuse(bufmgr);
+		devid = intel_get_drm_devid(fd);
+		batch = intel_batchbuffer_alloc(bufmgr, devid);
+
+		/* overallocate the buffers we're actually using because */
+		scratch_bo = drm_intel_bo_alloc_tiled(bufmgr, "scratch bo", 1024,
+						      BO_SIZE/4096, 4,
+						      &tiling_mode, &scratch_pitch, 0);
+		igt_assert(tiling_mode == I915_TILING_X);
+		igt_assert(scratch_pitch == 4096);
+		staging_bo = drm_intel_bo_alloc(bufmgr, "staging bo", BO_SIZE, 4096);
+		tiled_staging_bo = drm_intel_bo_alloc_tiled(bufmgr, "scratch bo", 1024,
+							    BO_SIZE/4096, 4,
+							    &tiling_mode,
+							    &scratch_pitch, 0);
+
+		igt_init_aperture_trashers(bufmgr);
+		mappable_gtt_limit = gem_mappable_aperture_size();
 	}
 
-	drmtest_cleanup_aperture_trashers();
-	drm_intel_bufmgr_destroy(bufmgr);
+	igt_subtest("reads")
+		test_partial_reads();
 
-	close(fd);
+	igt_subtest("writes")
+		test_partial_writes();
 
-	return 0;
+	igt_subtest("writes-after-reads")
+		test_partial_read_writes();
+
+	igt_fixture {
+		igt_cleanup_aperture_trashers();
+		drm_intel_bufmgr_destroy(bufmgr);
+
+		close(fd);
+	}
 }

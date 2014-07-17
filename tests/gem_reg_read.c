@@ -27,7 +27,9 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "i915_drm.h"
+#include <errno.h>
+
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 
 struct local_drm_i915_reg_read {
@@ -37,62 +39,41 @@ struct local_drm_i915_reg_read {
 
 #define REG_READ_IOCTL DRM_IOWR(DRM_COMMAND_BASE + 0x31, struct local_drm_i915_reg_read)
 
-static void handle_bad(int ret, int lerrno, int expected, const char *desc)
-{
-	if (ret != 0 && lerrno != expected) {
-		fprintf(stderr, "%s - errno was %d, but should have been %d\n",
-				desc, lerrno, expected);
-		exit(EXIT_FAILURE);
-	} else if (ret == 0) {
-		fprintf(stderr, "%s - Command succeeded, but should have failed\n",
-			desc);
-		exit(EXIT_FAILURE);
-	}
-}
-
 static uint64_t timer_query(int fd)
 {
-	struct local_drm_i915_reg_read read;
-	int ret;
+	struct local_drm_i915_reg_read reg_read;
 
-	read.offset = 0x2358;
-	ret = drmIoctl(fd, REG_READ_IOCTL, &read);
-	if (ret) {
+	reg_read.offset = 0x2358;
+	if (drmIoctl(fd, REG_READ_IOCTL, &reg_read)) {
 		perror("positive test case failed: ");
-		exit(EXIT_FAILURE);
+		igt_fail(1);
 	}
 
-	return read.val;
+	return reg_read.val;
 }
 
-int main(int argc, char *argv[])
+igt_simple_main
 {
-	struct local_drm_i915_reg_read read;
-	int ret, fd;
-	uint64_t val;
+	struct local_drm_i915_reg_read reg_read;
+	int fd, ret;
 
 	fd = drm_open_any();
 
-	read.offset = 0x2358;
-	ret = drmIoctl(fd, REG_READ_IOCTL, &read);
-	if (errno == EINVAL)
-		exit(77);
-	else if (ret)
-		exit(EXIT_FAILURE);
+	reg_read.offset = 0x2358;
+	ret = drmIoctl(fd, REG_READ_IOCTL, &reg_read);
+	igt_assert(ret == 0 || errno == EINVAL);
+	igt_require(ret == 0);
 
-	val = timer_query(fd);
+	reg_read.val = timer_query(fd);
 	sleep(1);
-	if (timer_query(fd) == val) {
-		fprintf(stderr, "Timer isn't moving, probably busted\n");
-		exit(EXIT_FAILURE);
-	}
+	/* Check that timer is moving and isn't busted. */
+	igt_assert(timer_query(fd) != reg_read.val);
 
 	/* bad reg */
-	read.offset = 0x12345678;
-	ret = drmIoctl(fd, REG_READ_IOCTL, &read);
-	handle_bad(ret, errno, EINVAL, "bad register");
+	reg_read.offset = 0x12345678;
+	ret = drmIoctl(fd, REG_READ_IOCTL, &reg_read);
+
+	igt_assert(ret != 0 && errno == EINVAL);
 
 	close(fd);
-
-	exit(EXIT_SUCCESS);
 }

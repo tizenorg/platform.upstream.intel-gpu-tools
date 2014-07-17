@@ -27,18 +27,18 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 #include "intel_bufmgr.h"
 #include "intel_batchbuffer.h"
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
 
 static drm_intel_bufmgr *bufmgr;
 struct intel_batchbuffer *batch;
@@ -54,12 +54,14 @@ struct intel_batchbuffer *batch;
 
 /* we do both cpu and gtt maps, so only need half of 64k to exhaust */
 
-int main(int argc, char **argv)
+igt_simple_main
 {
 	int fd;
 	int i;
 	char *ptr;
 	drm_intel_bo *load_bo;
+
+	igt_skip_on_simulation();
 
 	fd = drm_open_any();
 
@@ -68,7 +70,7 @@ int main(int argc, char **argv)
 	batch = intel_batchbuffer_alloc(bufmgr, intel_get_drm_devid(fd));
 
 	load_bo = drm_intel_bo_alloc(bufmgr, "target bo", 1024*4096, 4096);
-	assert(load_bo);
+	igt_assert(load_bo);
 
 	drm_intel_bufmgr_gem_set_vma_cache_size(bufmgr, 500);
 
@@ -79,19 +81,18 @@ int main(int argc, char **argv)
 	/* put some load onto the gpu to keep the light buffers active for long
 	 * enough */
 	for (i = 0; i < 10000; i++) {
-		BEGIN_BATCH(8);
-		OUT_BATCH(XY_SRC_COPY_BLT_CMD |
-			  XY_SRC_COPY_BLT_WRITE_ALPHA |
-			  XY_SRC_COPY_BLT_WRITE_RGB);
+		BLIT_COPY_BATCH_START(batch->devid, 0);
 		OUT_BATCH((3 << 24) | /* 32 bits */
 			  (0xcc << 16) | /* copy ROP */
 			  4096);
 		OUT_BATCH(0); /* dst x1,y1 */
 		OUT_BATCH((1024 << 16) | 512);
 		OUT_RELOC(load_bo, I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
+		BLIT_RELOC_UDW(batch->devid);
 		OUT_BATCH((0 << 16) | 512); /* src x1, y1 */
 		OUT_BATCH(4096);
 		OUT_RELOC(load_bo, I915_GEM_DOMAIN_RENDER, 0, 0);
+		BLIT_RELOC_UDW(batch->devid);
 		ADVANCE_BATCH();
 	}
 
@@ -102,24 +103,22 @@ int main(int argc, char **argv)
 
 		for (j = 0; j < GROUP_SZ; j++, i++) {
 			bo[j] = drm_intel_bo_alloc(bufmgr, "mmap bo", 4096, 4096);
-			assert(bo[j]);
+			igt_assert(bo[j]);
 
 			drm_intel_gem_bo_map_gtt(bo[j]);
 			ptr = bo[j]->virtual;
-			assert(ptr);
+			igt_assert(ptr);
 			*ptr = 'c';
 			drm_intel_gem_bo_unmap_gtt(bo[j]);
 
 			/* put it onto the active list ... */
-			BEGIN_BATCH(6);
-			OUT_BATCH(XY_COLOR_BLT_CMD |
-				  XY_COLOR_BLT_WRITE_ALPHA |
-				  XY_COLOR_BLT_WRITE_RGB);
+			COLOR_BLIT_COPY_BATCH_START(intel_get_drm_devid(fd), 0);
 			OUT_BATCH((3 << 24) | /* 32 bits */
 				  128);
 			OUT_BATCH(0); /* dst x1,y1 */
 			OUT_BATCH((1 << 16) | 1);
 			OUT_RELOC(bo[j], I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
+			BLIT_RELOC_UDW(intel_get_drm_devid(fd));
 			OUT_BATCH(0xffffffff); /* color */
 			ADVANCE_BATCH();
 		}
@@ -133,6 +132,4 @@ int main(int argc, char **argv)
 	drm_intel_bufmgr_destroy(bufmgr);
 
 	close(fd);
-
-	return 0;
 }

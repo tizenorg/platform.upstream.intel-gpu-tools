@@ -1,5 +1,5 @@
 /*
- * Copyright © 2011 Intel Corporation
+ * Copyright Â© 2011 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -29,7 +29,8 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <sys/types.h>
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
 
 static struct intel_register_range gen_bwcl_register_map[] = {
 	{0x00000000, 0x00000fff, INTEL_RANGE_RW},
@@ -151,7 +152,7 @@ intel_get_register_map(uint32_t devid)
 }
 
 struct intel_register_range *
-intel_get_register_range(struct intel_register_map map, uint32_t offset, int mode)
+intel_get_register_range(struct intel_register_map map, uint32_t offset, uint32_t mode)
 {
 	struct intel_register_range *range = map.map;
 	uint32_t align = map.alignment_mask;

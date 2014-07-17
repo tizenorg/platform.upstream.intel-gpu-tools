@@ -44,18 +44,21 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include "drm.h"
-#include "i915_drm.h"
+
+#include <drm.h>
+
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 #include "intel_bufmgr.h"
 #include "intel_batchbuffer.h"
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
+#include "igt_aux.h"
 
 static drm_intel_bufmgr *bufmgr;
 struct intel_batchbuffer *batch;
@@ -71,8 +74,8 @@ create_bo(int fd, uint32_t start_val)
 
 	bo = drm_intel_bo_alloc(bufmgr, "tiled bo", 1024 * 1024, 4096);
 	ret = drm_intel_bo_set_tiling(bo, &tiling, width * 4);
-	assert(ret == 0);
-	assert(tiling == I915_TILING_X);
+	igt_assert(ret == 0);
+	igt_assert(tiling == I915_TILING_X);
 
 	/* Fill the BO with dwords starting at start_val */
 	for (i = 0; i < 1024 * 1024 / 4; i++)
@@ -91,31 +94,31 @@ check_bo(int fd, drm_intel_bo *bo, uint32_t start_val)
 	gem_read(fd, bo->handle, 0, linear, sizeof(linear));
 
 	for (i = 0; i < 1024 * 1024 / 4; i++) {
-		if (linear[i] != start_val) {
-			fprintf(stderr, "Expected 0x%08x, found 0x%08x "
-				"at offset 0x%08x\n",
-				start_val, linear[i], i * 4);
-			abort();
-		}
+		igt_assert_f(linear[i] == start_val,
+			     "Expected 0x%08x, found 0x%08x "
+			     "at offset 0x%08x\n",
+			     start_val, linear[i], i * 4);
 		start_val++;
 	}
 }
 
-int main(int argc, char **argv)
+igt_simple_main
 {
 	drm_intel_bo *bo[4096];
 	uint32_t bo_start_val[4096];
 	uint32_t start = 0;
 	int fd, i, count;
 
+	igt_skip_on_simulation();
+
 	fd = drm_open_any();
 	count = 3 * gem_aperture_size(fd) / (1024*1024) / 2;
 	if (count > intel_get_total_ram_mb() * 9 / 10) {
 		count = intel_get_total_ram_mb() * 9 / 10;
-		printf("not enough RAM to run test, reducing buffer count\n");
+		igt_info("not enough RAM to run test, reducing buffer count\n");
 	}
 	count |= 1;
-	printf("Using %d 1MiB buffers\n", count);
+	igt_info("Using %d 1MiB buffers\n", count);
 
 	bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
 	drm_intel_bufmgr_gem_enable_reuse(bufmgr);
@@ -126,7 +129,7 @@ int main(int argc, char **argv)
 		bo_start_val[i] = start;
 
 		/*
-		printf("Creating bo %d\n", i);
+		igt_info("Creating bo %d\n", i);
 		check_bo(bo[i], bo_start_val[i]);
 		*/
 
@@ -135,7 +138,7 @@ int main(int argc, char **argv)
 
 	for (i = 0; i < count; i++) {
 		int src = count - i - 1;
-		intel_copy_bo(batch, bo[i], bo[src], width, height);
+		intel_copy_bo(batch, bo[i], bo[src], width*height*4);
 		bo_start_val[i] = bo_start_val[src];
 	}
 
@@ -146,18 +149,18 @@ int main(int argc, char **argv)
 		if (src == dst)
 			continue;
 
-		intel_copy_bo(batch, bo[dst], bo[src], width, height);
+		intel_copy_bo(batch, bo[dst], bo[src], width*height*4);
 		bo_start_val[dst] = bo_start_val[src];
 
 		/*
 		check_bo(bo[dst], bo_start_val[dst]);
-		printf("%d: copy bo %d to %d\n", i, src, dst);
+		igt_info("%d: copy bo %d to %d\n", i, src, dst);
 		*/
 	}
 
 	for (i = 0; i < count; i++) {
 		/*
-		printf("check %d\n", i);
+		igt_info("check %d\n", i);
 		*/
 		check_bo(fd, bo[i], bo_start_val[i]);
 
@@ -169,6 +172,4 @@ int main(int argc, char **argv)
 	drm_intel_bufmgr_destroy(bufmgr);
 
 	close(fd);
-
-	return 0;
 }

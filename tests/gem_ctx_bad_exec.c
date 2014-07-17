@@ -35,39 +35,15 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
 #include <sys/time.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
-
-struct local_drm_i915_gem_context_create {
-	__u32 ctx_id;
-	__u32 pad;
-};
-
-#define CONTEXT_CREATE_IOCTL DRM_IOWR(DRM_COMMAND_BASE + 0x2d, struct local_drm_i915_gem_context_create)
-
-static uint32_t context_create(int fd)
-{
-	struct local_drm_i915_gem_context_create create;
-	int ret;
-
-	ret = drmIoctl(fd, CONTEXT_CREATE_IOCTL, &create);
-	if (ret == -1 && (errno == ENODEV || errno == EINVAL)) {
-		exit(77);
-	} else if (ret) {
-		abort();
-	}
-
-	return create.ctx_id;
-}
 
 /* Copied from gem_exec_nop.c */
 static int exec(int fd, uint32_t handle, int ring, int ctx_id)
@@ -104,22 +80,34 @@ static int exec(int fd, uint32_t handle, int ring, int ctx_id)
 	return ret;
 }
 
-#define MI_BATCH_BUFFER_END	(0xA<<23)
-int main(int argc, char *argv[])
+uint32_t handle;
+uint32_t batch[2] = {MI_BATCH_BUFFER_END};
+uint32_t ctx_id;
+int fd;
+
+igt_main
 {
-	uint32_t handle;
-	uint32_t batch[2] = {MI_BATCH_BUFFER_END};
-	uint32_t ctx_id;
-	int fd;
-	fd = drm_open_any();
+	igt_skip_on_simulation();
 
-	ctx_id = context_create(fd);
+	igt_fixture {
+		fd = drm_open_any_render();
 
-	handle = gem_create(fd, 4096);
-	gem_write(fd, handle, 0, batch, sizeof(batch));
-	assert(exec(fd, handle, I915_EXEC_RENDER, ctx_id) == 0);
-	assert(exec(fd, handle, I915_EXEC_BSD, ctx_id) != 0);
-	assert(exec(fd, handle, I915_EXEC_BLT, ctx_id) != 0);
+		ctx_id = gem_context_create(fd);
 
-	exit(EXIT_SUCCESS);
+		handle = gem_create(fd, 4096);
+		gem_write(fd, handle, 0, batch, sizeof(batch));
+	}
+
+	igt_subtest("render")
+		igt_assert(exec(fd, handle, I915_EXEC_RENDER, ctx_id) == 0);
+	igt_subtest("bsd")
+		igt_assert(exec(fd, handle, I915_EXEC_BSD, ctx_id) != 0);
+	igt_subtest("blt")
+		igt_assert(exec(fd, handle, I915_EXEC_BLT, ctx_id) != 0);
+#ifdef I915_EXEC_VEBOX
+	igt_fixture
+		igt_require(gem_has_vebox(fd));
+	igt_subtest("vebox")
+		igt_assert(exec(fd, handle, I915_EXEC_VEBOX, ctx_id) != 0);
+#endif
 }

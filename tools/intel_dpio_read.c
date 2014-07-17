@@ -30,7 +30,8 @@
 #include <stdio.h>
 #include <err.h>
 #include <string.h>
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
 
 static void usage(char *cmdname)
 {
@@ -56,9 +57,9 @@ int main(int argc, char** argv)
 
 	intel_register_access_init(dev, 0);
 
-	val = intel_dpio_reg_read(reg);
+	val = intel_dpio_reg_read(reg, 0);
 
-	printf("Read DPIO register: 0x%x - Value : 0x%x\n", reg, val);
+	printf("0x%04x : 0x%08x\n", reg, val);
 
 	intel_register_access_fini();
 

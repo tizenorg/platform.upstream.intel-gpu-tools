@@ -47,7 +47,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
@@ -55,11 +54,12 @@
 #include <sys/time.h>
 #include <stdbool.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 #include "intel_bufmgr.h"
 #include "intel_batchbuffer.h"
-#include "intel_gpu_tools.h"
+#include "intel_chipset.h"
+#include "intel_io.h"
 
 static drm_intel_bufmgr *bufmgr;
 struct intel_batchbuffer *batch;
@@ -82,23 +82,22 @@ static void do_test(uint32_t tiling, unsigned stride,
 	uint32_t blt_stride, blt_bits;
 	bool tiling_changed = false;
 
-	printf("filling ring .. ");
+	igt_info("filling ring .. ");
 	busy_bo = drm_intel_bo_alloc(bufmgr, "busy bo bo", 16*1024*1024, 4096);
 
 	for (i = 0; i < 250; i++) {
-		BEGIN_BATCH(8);
-		OUT_BATCH(XY_SRC_COPY_BLT_CMD |
-			  XY_SRC_COPY_BLT_WRITE_ALPHA |
-			  XY_SRC_COPY_BLT_WRITE_RGB);
+		BLIT_COPY_BATCH_START(devid, 0);
 		OUT_BATCH((3 << 24) | /* 32 bits */
 			  (0xcc << 16) | /* copy ROP */
 			  2*1024*4);
 		OUT_BATCH(0 << 16 | 1024);
 		OUT_BATCH((2048) << 16 | (2048));
 		OUT_RELOC_FENCED(busy_bo, I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
+		BLIT_RELOC_UDW(devid);
 		OUT_BATCH(0 << 16 | 0);
 		OUT_BATCH(2*1024*4);
 		OUT_RELOC_FENCED(busy_bo, I915_GEM_DOMAIN_RENDER, 0, 0);
+		BLIT_RELOC_UDW(devid);
 		ADVANCE_BATCH();
 
 		if (IS_GEN6(devid) || IS_GEN7(devid)) {
@@ -111,7 +110,7 @@ static void do_test(uint32_t tiling, unsigned stride,
 	}
 	intel_batchbuffer_flush(batch);
 
-	printf("playing tricks .. ");
+	igt_info("playing tricks .. ");
 	/* first allocate the target so it gets out of the way of playing funky
 	 * tricks */
 	target_bo = drm_intel_bo_alloc(bufmgr, "target bo", TEST_SIZE, 4096);
@@ -121,7 +120,7 @@ static void do_test(uint32_t tiling, unsigned stride,
 	test_bo = drm_intel_bo_alloc(bufmgr, "tiled busy bo", TEST_SIZE, 4096);
 	test_bo_handle = test_bo->handle;
 	ret = drm_intel_bo_set_tiling(test_bo, &tiling_after, stride_after);
-	assert(ret == 0);
+	igt_assert(ret == 0);
 	drm_intel_gem_bo_map_gtt(test_bo);
 	ptr = test_bo->virtual;
 	*ptr = 0;
@@ -135,12 +134,13 @@ static void do_test(uint32_t tiling, unsigned stride,
 	/* note we need a bo bigger than batches, otherwise the buffer reuse
 	 * trick will fail. */
 	test_bo = drm_intel_bo_alloc(bufmgr, "busy bo", TEST_SIZE, 4096);
-	if (test_bo_handle != test_bo->handle)
-		fprintf(stderr, "libdrm reuse trick failed\n");
+	/* double check that the reuse trick worked */
+	igt_assert(test_bo_handle == test_bo->handle);
+
 	test_bo_handle = test_bo->handle;
 	/* ensure we have the right tiling before we start. */
 	ret = drm_intel_bo_set_tiling(test_bo, &tiling, stride);
-	assert(ret == 0);
+	igt_assert(ret == 0);
 
 	if (tiling == I915_TILING_NONE) {
 		drm_intel_bo_subdata(test_bo, 0, TEST_SIZE, data);
@@ -159,58 +159,55 @@ static void do_test(uint32_t tiling, unsigned stride,
 		blt_bits = XY_SRC_COPY_BLT_SRC_TILED;
 	}
 
-	BEGIN_BATCH(8);
-	OUT_BATCH(XY_SRC_COPY_BLT_CMD |
-		  XY_SRC_COPY_BLT_WRITE_ALPHA |
-		  blt_bits |
-		  XY_SRC_COPY_BLT_WRITE_RGB);
+	BLIT_COPY_BATCH_START(devid, blt_bits);
 	OUT_BATCH((3 << 24) | /* 32 bits */
 		  (0xcc << 16) | /* copy ROP */
 		  stride);
 	OUT_BATCH(0 << 16 | 0);
 	OUT_BATCH((TEST_HEIGHT(stride)) << 16 | (TEST_WIDTH(stride)));
 	OUT_RELOC_FENCED(target_bo, I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
+	BLIT_RELOC_UDW(devid);
 	OUT_BATCH(0 << 16 | 0);
 	OUT_BATCH(blt_stride);
 	OUT_RELOC_FENCED(test_bo, I915_GEM_DOMAIN_RENDER, 0, 0);
+	BLIT_RELOC_UDW(devid);
 	ADVANCE_BATCH();
 	intel_batchbuffer_flush(batch);
 
 	drm_intel_bo_unreference(test_bo);
 
 	test_bo = drm_intel_bo_alloc_for_render(bufmgr, "tiled busy bo", TEST_SIZE, 4096);
-	if (test_bo_handle != test_bo->handle)
-		fprintf(stderr, "libdrm reuse trick failed\n");
+	/* double check that the reuse trick worked */
+	igt_assert(test_bo_handle == test_bo->handle);
 	ret = drm_intel_bo_set_tiling(test_bo, &tiling_after, stride_after);
-	assert(ret == 0);
+	igt_assert(ret == 0);
 
 	/* Note: We don't care about gen4+ here because the blitter doesn't use
 	 * fences there. So not setting tiling flags on the tiled buffer is ok.
 	 */
-	BEGIN_BATCH(8);
-	OUT_BATCH(XY_SRC_COPY_BLT_CMD |
-		  XY_SRC_COPY_BLT_WRITE_ALPHA |
-		  XY_SRC_COPY_BLT_WRITE_RGB);
+	BLIT_COPY_BATCH_START(devid, 0);
 	OUT_BATCH((3 << 24) | /* 32 bits */
 		  (0xcc << 16) | /* copy ROP */
 		  stride_after);
 	OUT_BATCH(0 << 16 | 0);
 	OUT_BATCH((1) << 16 | (1));
 	OUT_RELOC_FENCED(test_bo, I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
+	BLIT_RELOC_UDW(devid);
 	OUT_BATCH(0 << 16 | 0);
 	OUT_BATCH(stride_after);
 	OUT_RELOC_FENCED(test_bo, I915_GEM_DOMAIN_RENDER, 0, 0);
+	BLIT_RELOC_UDW(devid);
 	ADVANCE_BATCH();
 	intel_batchbuffer_flush(batch);
 
 	/* Now try to trick the kernel the kernel into changing up the fencing
 	 * too early. */
 
-	printf("checking .. ");
+	igt_info("checking .. ");
 	memset(data, 0, TEST_SIZE);
 	drm_intel_bo_get_subdata(target_bo, 0, TEST_SIZE, data);
 	for (i = 0; i < TEST_SIZE/4; i++)
-		assert(data[i] == i);
+		igt_assert(data[i] == i);
 
 	/* check whether tiling on the test_bo actually changed. */
 	drm_intel_gem_bo_map_gtt(test_bo);
@@ -220,50 +217,56 @@ static void do_test(uint32_t tiling, unsigned stride,
 			tiling_changed = true;
 	ptr = NULL;
 	drm_intel_gem_bo_unmap_gtt(test_bo);
-	assert(tiling_changed);
+	igt_assert(tiling_changed);
 
 	drm_intel_bo_unreference(test_bo);
 	drm_intel_bo_unreference(target_bo);
 	drm_intel_bo_unreference(busy_bo);
-	printf("done\n");
+	igt_info("done\n");
 }
 
-int main(int argc, char **argv)
+int fd;
+
+igt_main
 {
-	int i, fd;
+	int i;
 	uint32_t tiling, tiling_after;
 
-	for (i = 0; i < 1024*256; i++)
-		data[i] = i;
+	igt_skip_on_simulation();
 
-	fd = drm_open_any();
+	igt_fixture {
+		for (i = 0; i < 1024*256; i++)
+			data[i] = i;
 
-	bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
-	drm_intel_bufmgr_gem_enable_reuse(bufmgr);
-	devid = intel_get_drm_devid(fd);
-	batch = intel_batchbuffer_alloc(bufmgr, devid);
+		fd = drm_open_any();
 
+		bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
+		drm_intel_bufmgr_gem_enable_reuse(bufmgr);
+		devid = intel_get_drm_devid(fd);
+		batch = intel_batchbuffer_alloc(bufmgr, devid);
+	}
 
-	printf("testing untiled->tiled transisition:\n");
-	tiling = I915_TILING_NONE;
-	tiling_after = I915_TILING_X;
-	do_test(tiling, TEST_STRIDE, tiling_after, TEST_STRIDE);
-	assert(tiling == I915_TILING_NONE);
-	assert(tiling_after == I915_TILING_X);
+	igt_subtest("untiled-to-tiled") {
+		tiling = I915_TILING_NONE;
+		tiling_after = I915_TILING_X;
+		do_test(tiling, TEST_STRIDE, tiling_after, TEST_STRIDE);
+		igt_assert(tiling == I915_TILING_NONE);
+		igt_assert(tiling_after == I915_TILING_X);
+	}
 
-	printf("testing tiled->untiled transisition:\n");
-	tiling = I915_TILING_X;
-	tiling_after = I915_TILING_NONE;
-	do_test(tiling, TEST_STRIDE, tiling_after, TEST_STRIDE);
-	assert(tiling == I915_TILING_X);
-	assert(tiling_after == I915_TILING_NONE);
+	igt_subtest("tiled-to-untiled") {
+		tiling = I915_TILING_X;
+		tiling_after = I915_TILING_NONE;
+		do_test(tiling, TEST_STRIDE, tiling_after, TEST_STRIDE);
+		igt_assert(tiling == I915_TILING_X);
+		igt_assert(tiling_after == I915_TILING_NONE);
+	}
 
-	printf("testing tiled->tiled transisition:\n");
-	tiling = I915_TILING_X;
-	tiling_after = I915_TILING_X;
-	do_test(tiling, TEST_STRIDE/2, tiling_after, TEST_STRIDE);
-	assert(tiling == I915_TILING_X);
-	assert(tiling_after == I915_TILING_X);
-
-	return 0;
+	igt_subtest("tiled-to-tiled") {
+		tiling = I915_TILING_X;
+		tiling_after = I915_TILING_X;
+		do_test(tiling, TEST_STRIDE/2, tiling_after, TEST_STRIDE);
+		igt_assert(tiling == I915_TILING_X);
+		igt_assert(tiling_after == I915_TILING_X);
+	}
 }

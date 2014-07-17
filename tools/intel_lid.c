@@ -37,9 +37,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
 #include "intel_reg.h"
 #include "intel_bios.h"
+#include "intel_chipset.h"
 
 enum lid_status {
 	LID_UNKNOWN = -1,
@@ -85,7 +86,7 @@ static int i830_lvds_acpi_lid_state(void)
 		}
 	}
 	state_name = malloc(strlen(ACPI_LID) + strlen(lid_dent->d_name) + 7);
-	memset(state_name, 0, sizeof(state_name));
+	memset(state_name, 0, strlen(ACPI_LID) + strlen(lid_dent->d_name) + 7);
 	strcat(state_name, ACPI_LID);
 	strcat(state_name, lid_dent->d_name);
 	strcat(state_name, "/state");
@@ -117,7 +118,7 @@ int main(int argc, char **argv)
 {
 	int swf14, acpi_lid;
 
-	intel_get_mmio(intel_get_pci_device());
+	intel_mmio_use_pci_bar(intel_get_pci_device());
 
 	while (1) {
 		swf14 = INREG(SWF14);

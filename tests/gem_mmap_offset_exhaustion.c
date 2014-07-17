@@ -29,15 +29,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 
 #define OBJECT_SIZE (1024*1024)
@@ -61,11 +59,7 @@ create_and_map_bo(int fd)
 	handle = gem_create(fd, OBJECT_SIZE);
 
 	ptr = gem_mmap(fd, handle, OBJECT_SIZE, PROT_READ | PROT_WRITE);
-
-	if (!ptr) {
-		fprintf(stderr, "mmap failed\n");
-		assert(ptr);
-	}
+	igt_assert(ptr);
 
 	/* touch it to force it into the gtt */
 	*ptr = 0;
@@ -79,9 +73,11 @@ create_and_map_bo(int fd)
 	gem_madvise(fd, handle, I915_MADV_DONTNEED);
 }
 
-int main(int argc, char **argv)
+igt_simple_main
 {
 	int fd, i;
+
+	igt_skip_on_simulation();
 
 	fd = drm_open_any();
 
@@ -91,6 +87,4 @@ int main(int argc, char **argv)
 		create_and_map_bo(fd);
 
 	close(fd);
-
-	return 0;
 }

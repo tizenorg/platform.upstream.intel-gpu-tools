@@ -33,18 +33,16 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
 
 #define OBJ_SIZE (1024*1024)
 
@@ -68,14 +66,15 @@ create_bo(int fd)
 	return handle;
 }
 
-int
-main(int argc, char **argv)
+igt_simple_main
 {
 	int fd;
 	int i;
 	uint32_t handle;
 
 	uint32_t *ptr;
+
+	igt_skip_on_simulation();
 
 	fd = drm_open_any();
 
@@ -90,7 +89,7 @@ main(int argc, char **argv)
 
 	/* stirr up the page allocator a bit. */
 	ptr = malloc(OBJ_SIZE);
-	assert(ptr);
+	igt_assert(ptr);
 	memset(ptr, 0x1, OBJ_SIZE);
 
 	handle = create_bo(fd);
@@ -100,9 +99,7 @@ main(int argc, char **argv)
 	 */
 	gem_read(fd, handle, 0, ptr, OBJ_SIZE);
 	for (i = 0; i < OBJ_SIZE/4; i++)
-		assert(ptr[i] == i);
+		igt_assert(ptr[i] == i);
 
 	close(fd);
-
-	return 0;
 }

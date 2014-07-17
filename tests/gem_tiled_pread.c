@@ -38,18 +38,17 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
 
 #define WIDTH 512
 #define HEIGHT 512
@@ -71,7 +70,7 @@ gem_get_tiling(int fd, uint32_t handle, uint32_t *tiling, uint32_t *swizzle)
 	get_tiling.handle = handle;
 
 	ret = drmIoctl(fd, DRM_IOCTL_I915_GEM_GET_TILING, &get_tiling);
-	assert(ret == 0);
+	igt_assert(ret == 0);
 
 	*tiling = get_tiling.tiling_mode;
 	*swizzle = get_tiling.swizzle_mode;
@@ -121,12 +120,11 @@ calculate_expected(int offset)
 	int tile_y = tile_off / tile_width;
 	int tile_x = (tile_off % tile_width) / 4;
 
-	/* printf("%3d, %3d, %3d,%3d\n", base_x, base_y, tile_x, tile_y); */
+	igt_debug("%3d, %3d, %3d,%3d\n", base_x, base_y, tile_x, tile_y);
 	return (base_y + tile_y) * WIDTH + base_x + tile_x;
 }
 
-int
-main(int argc, char **argv)
+igt_simple_main
 {
 	int fd;
 	int i, iter = 100;
@@ -213,25 +211,19 @@ main(int argc, char **argv)
 				swizzle_str = "bit9^10^11";
 				break;
 			default:
-				fprintf(stderr, "Bad swizzle bits; %d\n",
-					swizzle);
-				abort();
+				igt_assert_f(0, "Bad swizzle bits; %d\n",
+					     swizzle);
 			}
 			expected_val = calculate_expected(swizzled_offset);
 			found_val = linear[(j - offset) / 4];
-			if (expected_val != found_val) {
-				fprintf(stderr,
-					"Bad read [%d]: %d instead of %d at 0x%08x "
-					"for read from 0x%08x to 0x%08x, swizzle=%s\n",
-					i, found_val, expected_val, j,
-					offset, offset + len,
-					swizzle_str);
-				abort();
-			}
+			igt_assert_f(expected_val == found_val,
+				     "Bad read [%d]: %d instead of %d at 0x%08x "
+				     "for read from 0x%08x to 0x%08x, swizzle=%s\n",
+				     i, found_val, expected_val, j,
+				     offset, offset + len,
+				     swizzle_str);
 		}
 	}
 
 	close(fd);
-
-	return 0;
 }

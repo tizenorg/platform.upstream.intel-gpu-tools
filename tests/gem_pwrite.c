@@ -30,16 +30,14 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
 #include <sys/time.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 
 #define OBJECT_SIZE 16384
@@ -49,7 +47,6 @@
 #define BLT_WRITE_RGB		(1<<20)
 #define BLT_SRC_TILED		(1<<15)
 #define BLT_DST_TILED		(1<<11)
-#define MI_BATCH_BUFFER_END	(0xA<<23)
 
 static void do_gem_write(int fd, uint32_t handle, void *buf, int len, int loops)
 {
@@ -84,39 +81,81 @@ static const char *bytes_per_sec(char *buf, double v)
 }
 
 
+uint32_t *src, dst;
+int fd;
+
 int main(int argc, char **argv)
 {
 	int object_size = 0;
 	uint32_t buf[20];
-	uint32_t *src, dst;
-	int fd, count;
+	int count;
+	const struct {
+		int level;
+		const char *name;
+	} cache[] = {
+		{ 0, "uncached" },
+		{ 1, "snoop" },
+		{ 2, "display" },
+		{ -1 },
+	}, *c;
 
-	if (argc > 1)
+	igt_skip_on_simulation();
+
+	igt_subtest_init(argc, argv);
+
+	if (argc > 1 && atoi(argv[1]))
 		object_size = atoi(argv[1]);
 	if (object_size == 0)
 		object_size = OBJECT_SIZE;
 	object_size = (object_size + 3) & -4;
 
-	fd = drm_open_any();
+	igt_fixture {
+		fd = drm_open_any();
 
-	dst = gem_create(fd, object_size);
-	src = malloc(object_size);
-	for (count = 1; count <= 1<<17; count <<= 1) {
-		struct timeval start, end;
-
-		gettimeofday(&start, NULL);
-		do_gem_write(fd, dst, src, object_size, count);
-		gettimeofday(&end, NULL);
-		printf("Time to pwrite %d bytes x %6d:	%7.3fµs, %s\n",
-		       object_size, count,
-		       elapsed(&start, &end, count),
-		       bytes_per_sec((char *)buf, object_size/elapsed(&start, &end, count)*1e6));
-		fflush(stdout);
+		dst = gem_create(fd, object_size);
+		src = malloc(object_size);
 	}
-	free(src);
-	gem_close(fd, dst);
 
-	close(fd);
+	igt_subtest("normal") {
+		for (count = 1; count <= 1<<17; count <<= 1) {
+			struct timeval start, end;
 
-	return 0;
+			gettimeofday(&start, NULL);
+			do_gem_write(fd, dst, src, object_size, count);
+			gettimeofday(&end, NULL);
+			igt_info("Time to pwrite %d bytes x %6d:	%7.3fµs, %s\n",
+				 object_size, count,
+				 elapsed(&start, &end, count),
+				 bytes_per_sec((char *)buf, object_size/elapsed(&start, &end, count)*1e6));
+			fflush(stdout);
+		}
+	}
+
+	for (c = cache; c->level != -1; c++) {
+		igt_subtest(c->name) {
+			gem_set_caching(fd, dst, c->level);
+
+			for (count = 1; count <= 1<<17; count <<= 1) {
+				struct timeval start, end;
+
+				gettimeofday(&start, NULL);
+				do_gem_write(fd, dst, src, object_size, count);
+				gettimeofday(&end, NULL);
+				igt_info("Time to %s pwrite %d bytes x %6d:	%7.3fµs, %s\n",
+					 c->name, object_size, count,
+					 elapsed(&start, &end, count),
+					 bytes_per_sec((char *)buf, object_size/elapsed(&start, &end, count)*1e6));
+				fflush(stdout);
+			}
+		}
+	}
+
+	igt_fixture {
+		free(src);
+		gem_close(fd, dst);
+
+		close(fd);
+	}
+
+	igt_exit();
 }

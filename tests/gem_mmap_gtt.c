@@ -25,22 +25,22 @@
  *
  */
 
+#define _GNU_SOURCE
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
+#include "igt_debugfs.h"
 
-#define OBJECT_SIZE (16*1024*1024)
+static int OBJECT_SIZE = 16*1024*1024;
 
 static void set_domain(int fd, uint32_t handle)
 {
@@ -53,7 +53,7 @@ mmap_bo(int fd, uint32_t handle)
 	void *ptr;
 
 	ptr = gem_mmap(fd, handle, OBJECT_SIZE, PROT_READ | PROT_WRITE);
-	assert(ptr != MAP_FAILED);
+	igt_assert(ptr != MAP_FAILED);
 
 	return ptr;
 }
@@ -71,6 +71,43 @@ create_pointer(int fd)
 	gem_close(fd, handle);
 
 	return ptr;
+}
+
+static void
+test_access(int fd)
+{
+	uint32_t handle, flink, handle2;
+	struct drm_i915_gem_mmap_gtt mmap_arg;
+	int fd2;
+
+	handle = gem_create(fd, OBJECT_SIZE);
+	igt_assert(handle);
+
+	fd2 = drm_open_any();
+
+	/* Check that fd1 can mmap. */
+	mmap_arg.handle = handle;
+	igt_assert(drmIoctl(fd,
+			    DRM_IOCTL_I915_GEM_MMAP_GTT,
+			    &mmap_arg) == 0);
+
+	igt_assert(mmap64(0, OBJECT_SIZE, PROT_READ | PROT_WRITE,
+			  MAP_SHARED, fd, mmap_arg.offset));
+
+	/* Check that the same offset on the other fd doesn't work. */
+	igt_assert(mmap64(0, OBJECT_SIZE, PROT_READ | PROT_WRITE,
+			  MAP_SHARED, fd2, mmap_arg.offset) == MAP_FAILED);
+	igt_assert(errno == EACCES);
+
+	flink = gem_flink(fd, handle);
+	igt_assert(flink);
+	handle2 = gem_open(fd2, flink);
+	igt_assert(handle2);
+
+	/* Recheck that it works after flink. */
+	/* Check that the same offset on the other fd doesn't work. */
+	igt_assert(mmap64(0, OBJECT_SIZE, PROT_READ | PROT_WRITE,
+			  MAP_SHARED, fd2, mmap_arg.offset));
 }
 
 static void
@@ -144,18 +181,42 @@ test_read(int fd)
 	munmap(dst, OBJECT_SIZE);
 }
 
-int main(int argc, char **argv)
+static void
+run_without_prefault(int fd,
+			void (*func)(int fd))
 {
-	int fd;
+	igt_disable_prefault();
+	func(fd);
+	igt_enable_prefault();
+}
 
-	fd = drm_open_any();
+int fd;
 
-	test_copy(fd);
-	test_read(fd);
-	test_write(fd);
-	test_write_gtt(fd);
+igt_main
+{
+	if (igt_run_in_simulation())
+		OBJECT_SIZE = 1 * 1024 * 1024;
 
-	close(fd);
+	igt_fixture
+		fd = drm_open_any();
 
-	return 0;
+	igt_subtest("access")
+		test_access(fd);
+	igt_subtest("copy")
+		test_copy(fd);
+	igt_subtest("read")
+		test_read(fd);
+	igt_subtest("write")
+		test_write(fd);
+	igt_subtest("write-gtt")
+		test_write_gtt(fd);
+	igt_subtest("read-no-prefault")
+		run_without_prefault(fd, test_read);
+	igt_subtest("write-no-prefault")
+		run_without_prefault(fd, test_write);
+	igt_subtest("write-gtt-no-prefault")
+		run_without_prefault(fd, test_write_gtt);
+
+	igt_fixture
+		close(fd);
 }

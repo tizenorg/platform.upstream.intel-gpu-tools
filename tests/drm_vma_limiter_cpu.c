@@ -27,18 +27,18 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 #include "intel_bufmgr.h"
 #include "intel_batchbuffer.h"
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
 
 static drm_intel_bufmgr *bufmgr;
 struct intel_batchbuffer *batch;
@@ -55,11 +55,13 @@ struct intel_batchbuffer *batch;
 #define BO_ARRAY_SIZE 68000
 drm_intel_bo *bos[BO_ARRAY_SIZE];
 
-int main(int argc, char **argv)
+igt_simple_main
 {
 	int fd;
 	int i;
 	char *ptr;
+
+	igt_skip_on_simulation();
 
 	fd = drm_open_any();
 
@@ -71,11 +73,11 @@ int main(int argc, char **argv)
 
 	for (i = 0; i < BO_ARRAY_SIZE; i++) {
 		bos[i] = drm_intel_bo_alloc(bufmgr, "mmap bo", 4096, 4096);
-		assert(bos[i]);
+		igt_assert(bos[i]);
 
 		drm_intel_bo_map(bos[i], 1);
 		ptr = bos[i]->virtual;
-		assert(ptr);
+		igt_assert(ptr);
 		*ptr = 'c';
 		drm_intel_bo_unmap(bos[i]);
 	}
@@ -83,11 +85,11 @@ int main(int argc, char **argv)
 	/* and recheck whether a second map of the same still works */
 	for (i = 0; i < BO_ARRAY_SIZE; i++) {
 		bos[i] = drm_intel_bo_alloc(bufmgr, "mmap bo", 4096, 4096);
-		assert(bos[i]);
+		igt_assert(bos[i]);
 
 		drm_intel_bo_map(bos[i], 1);
 		ptr = bos[i]->virtual;
-		assert(*ptr = 'c');
+		igt_assert(*ptr = 'c');
 		drm_intel_bo_unmap(bos[i]);
 	}
 
@@ -95,6 +97,4 @@ int main(int argc, char **argv)
 	drm_intel_bufmgr_destroy(bufmgr);
 
 	close(fd);
-
-	return 0;
 }

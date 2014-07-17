@@ -28,14 +28,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 
 static void
@@ -43,24 +42,24 @@ test_flink(int fd)
 {
 	struct drm_i915_gem_create create;
 	struct drm_gem_flink flink;
-	struct drm_gem_open gem_open;
+	struct drm_gem_open open_struct;
 	int ret;
 
-	printf("Testing flink and open.\n");
+	igt_info("Testing flink and open.\n");
 
 	memset(&create, 0, sizeof(create));
 	create.size = 16 * 1024;
 	ret = ioctl(fd, DRM_IOCTL_I915_GEM_CREATE, &create);
-	assert(ret == 0);
+	igt_assert(ret == 0);
 
 	flink.handle = create.handle;
 	ret = ioctl(fd, DRM_IOCTL_GEM_FLINK, &flink);
-	assert(ret == 0);
+	igt_assert(ret == 0);
 
-	gem_open.name = flink.name;
-	ret = ioctl(fd, DRM_IOCTL_GEM_OPEN, &gem_open);
-	assert(ret == 0);
-	assert(gem_open.handle != 0);
+	open_struct.name = flink.name;
+	ret = ioctl(fd, DRM_IOCTL_GEM_OPEN, &open_struct);
+	igt_assert(ret == 0);
+	igt_assert(open_struct.handle != 0);
 }
 
 static void
@@ -71,21 +70,21 @@ test_double_flink(int fd)
 	struct drm_gem_flink flink2;
 	int ret;
 
-	printf("Testing repeated flink.\n");
+	igt_info("Testing repeated flink.\n");
 
 	memset(&create, 0, sizeof(create));
 	create.size = 16 * 1024;
 	ret = ioctl(fd, DRM_IOCTL_I915_GEM_CREATE, &create);
-	assert(ret == 0);
+	igt_assert(ret == 0);
 
 	flink.handle = create.handle;
 	ret = ioctl(fd, DRM_IOCTL_GEM_FLINK, &flink);
-	assert(ret == 0);
+	igt_assert(ret == 0);
 
 	flink2.handle = create.handle;
 	ret = ioctl(fd, DRM_IOCTL_GEM_FLINK, &flink2);
-	assert(ret == 0);
-	assert(flink2.name == flink.name);
+	igt_assert(ret == 0);
+	igt_assert(flink2.name == flink.name);
 }
 
 static void
@@ -94,37 +93,77 @@ test_bad_flink(int fd)
 	struct drm_gem_flink flink;
 	int ret;
 
-	printf("Testing error return on bad flink ioctl.\n");
+	igt_info("Testing error return on bad flink ioctl.\n");
 
 	flink.handle = 0x10101010;
 	ret = ioctl(fd, DRM_IOCTL_GEM_FLINK, &flink);
-	assert(ret == -1 && errno == ENOENT);
+	igt_assert(ret == -1 && errno == ENOENT);
 }
 
 static void
 test_bad_open(int fd)
 {
-	struct drm_gem_open gem_open;
+	struct drm_gem_open open_struct;
 	int ret;
 
-	printf("Testing error return on bad open ioctl.\n");
+	igt_info("Testing error return on bad open ioctl.\n");
 
-	gem_open.name = 0x10101010;
-	ret = ioctl(fd, DRM_IOCTL_GEM_OPEN, &gem_open);
+	open_struct.name = 0x10101010;
+	ret = ioctl(fd, DRM_IOCTL_GEM_OPEN, &open_struct);
 
-	assert(ret == -1 && errno == ENOENT);
+	igt_assert(ret == -1 && errno == ENOENT);
 }
 
-int main(int argc, char **argv)
+static void
+test_flink_lifetime(int fd)
 {
-	int fd;
+	struct drm_i915_gem_create create;
+	struct drm_gem_flink flink;
+	struct drm_gem_open open_struct;
+	int ret, fd2;
 
-	fd = drm_open_any();
+	igt_info("Testing flink lifetime.\n");
 
-	test_flink(fd);
-	test_double_flink(fd);
-	test_bad_flink(fd);
-	test_bad_open(fd);
+	fd2 = drm_open_any();
 
-	return 0;
+	memset(&create, 0, sizeof(create));
+	create.size = 16 * 1024;
+	ret = ioctl(fd2, DRM_IOCTL_I915_GEM_CREATE, &create);
+	igt_assert(ret == 0);
+
+	flink.handle = create.handle;
+	ret = ioctl(fd2, DRM_IOCTL_GEM_FLINK, &flink);
+	igt_assert(ret == 0);
+
+	open_struct.name = flink.name;
+	ret = ioctl(fd, DRM_IOCTL_GEM_OPEN, &open_struct);
+	igt_assert(ret == 0);
+	igt_assert(open_struct.handle != 0);
+
+	close(fd2);
+	fd2 = drm_open_any();
+
+	open_struct.name = flink.name;
+	ret = ioctl(fd2, DRM_IOCTL_GEM_OPEN, &open_struct);
+	igt_assert(ret == 0);
+	igt_assert(open_struct.handle != 0);
+}
+
+int fd;
+
+igt_main
+{
+	igt_fixture
+		fd = drm_open_any();
+
+	igt_subtest("basic")
+		test_flink(fd);
+	igt_subtest("double-flink")
+		test_double_flink(fd);
+	igt_subtest("bad-flink")
+		test_bad_flink(fd);
+	igt_subtest("bad-open")
+		test_bad_open(fd);
+	igt_subtest("flink-lifetime")
+		test_flink_lifetime(fd);
 }

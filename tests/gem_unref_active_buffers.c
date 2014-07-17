@@ -35,62 +35,57 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 #include "intel_bufmgr.h"
 #include "intel_batchbuffer.h"
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
 
 static drm_intel_bufmgr *bufmgr;
 struct intel_batchbuffer *batch;
 static drm_intel_bo *load_bo;
 
-int main(int argc, char **argv)
+igt_simple_main
 {
 	int fd, i;
+
+	igt_skip_on_simulation();
 
 	fd = drm_open_any();
 
 	bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
-	if (!bufmgr) {
-		fprintf(stderr, "failed to init libdrm\n");
-		exit(-1);
-	}
+	igt_assert(bufmgr);
 	/* don't enable buffer reuse!! */
 	//drm_intel_bufmgr_gem_enable_reuse(bufmgr);
 
 	batch = intel_batchbuffer_alloc(bufmgr, intel_get_drm_devid(fd));
-	assert(batch);
+	igt_assert(batch);
 
 	/* put some load onto the gpu to keep the light buffers active for long
 	 * enough */
 	for (i = 0; i < 1000; i++) {
 		load_bo = drm_intel_bo_alloc(bufmgr, "target bo", 1024*4096, 4096);
-		if (!load_bo) {
-			fprintf(stderr, "failed to alloc target buffer\n");
-			exit(-1);
-		}
+		igt_assert(load_bo);
 
-		BEGIN_BATCH(8);
-		OUT_BATCH(XY_SRC_COPY_BLT_CMD |
-			  XY_SRC_COPY_BLT_WRITE_ALPHA |
-			  XY_SRC_COPY_BLT_WRITE_RGB);
+		BLIT_COPY_BATCH_START(batch->devid, 0);
 		OUT_BATCH((3 << 24) | /* 32 bits */
 			  (0xcc << 16) | /* copy ROP */
 			  4096);
 		OUT_BATCH(0); /* dst x1,y1 */
 		OUT_BATCH((1024 << 16) | 512);
 		OUT_RELOC(load_bo, I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
+		BLIT_RELOC_UDW(batch->devid);
 		OUT_BATCH((0 << 16) | 512); /* src x1, y1 */
 		OUT_BATCH(4096);
 		OUT_RELOC(load_bo, I915_GEM_DOMAIN_RENDER, 0, 0);
+		BLIT_RELOC_UDW(batch->devid);
 		ADVANCE_BATCH();
 
 		intel_batchbuffer_flush(batch);
@@ -102,6 +97,4 @@ int main(int argc, char **argv)
 	drm_intel_bufmgr_destroy(bufmgr);
 
 	close(fd);
-
-	return 0;
 }

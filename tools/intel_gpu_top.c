@@ -27,7 +27,9 @@
  *
  */
 
+#ifdef HAVE_CONFIG_H
 #include "config.h"
+#endif
 
 #include <unistd.h>
 #include <stdlib.h>
@@ -40,8 +42,10 @@
 #ifdef HAVE_TERMIOS_H
 #include <termios.h>
 #endif
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
 #include "instdone.h"
+#include "intel_reg.h"
+#include "intel_chipset.h"
 
 #define  FORCEWAKE	    0xA18C
 #define  FORCEWAKE_ACK	    0x130090
@@ -142,7 +146,7 @@ update_idle_bit(struct top_bit *top_bit)
 {
 	uint32_t reg_val;
 
-	if (top_bit->bit->reg == INST_DONE_1)
+	if (top_bit->bit->reg == INSTDONE_1)
 		reg_val = instdone1;
 	else
 		reg_val = instdone;
@@ -466,12 +470,10 @@ int main(int argc, char **argv)
 			break;
 		}
 	}
-	argc -= optind;
-	argv += optind;
 
 	pci_dev = intel_get_pci_device();
 	devid = pci_dev->device_id;
-	intel_get_mmio(pci_dev);
+	intel_mmio_use_pci_bar(pci_dev);
 	init_instdone_definitions(devid);
 
 	/* Do we have a command to run? */
@@ -559,10 +561,10 @@ int main(int argc, char **argv)
 			long long interval;
 			ti = gettime();
 			if (IS_965(devid)) {
-				instdone = INREG(INST_DONE_I965);
-				instdone1 = INREG(INST_DONE_1);
+				instdone = INREG(INSTDONE_I965);
+				instdone1 = INREG(INSTDONE_1);
 			} else
-				instdone = INREG(INST_DONE);
+				instdone = INREG(INSTDONE);
 
 			for (j = 0; j < num_instdone_bits; j++)
 				update_idle_bit(&top_bits[j]);

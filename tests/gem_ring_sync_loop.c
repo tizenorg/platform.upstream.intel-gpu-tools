@@ -28,19 +28,19 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 #include "intel_bufmgr.h"
 #include "intel_batchbuffer.h"
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
 #include "i830_reg.h"
+#include "intel_chipset.h"
 
 static drm_intel_bufmgr *bufmgr;
 struct intel_batchbuffer *batch;
@@ -56,14 +56,15 @@ static drm_intel_bo *target_buffer;
 #define MI_DO_COMPARE			(1<<21)
 
 static void
-store_dword_loop(void)
+store_dword_loop(int fd)
 {
 	int i;
+	int num_rings = gem_get_num_rings(fd);
 
 	srandom(0xdeadbeef);
 
-	for (i = 0; i < 0x100000; i++) {
-		int ring = random() % 3 + 1;
+	for (i = 0; i < SLOW_QUICK(0x100000, 10); i++) {
+		int ring = random() % num_rings + 1;
 
 		if (ring == I915_EXEC_RENDER) {
 			BEGIN_BATCH(4);
@@ -90,50 +91,31 @@ store_dword_loop(void)
 	drm_intel_bo_unmap(target_buffer);
 }
 
-int main(int argc, char **argv)
+igt_simple_main
 {
 	int fd;
 	int devid;
 
-	if (argc != 1) {
-		fprintf(stderr, "usage: %s\n", argv[0]);
-		exit(-1);
-	}
-
 	fd = drm_open_any();
 	devid = intel_get_drm_devid(fd);
-	if (!HAS_BLT_RING(devid)) {
-		fprintf(stderr, "inter ring check needs gen6+\n");
-		return 77;
-	}
+	gem_require_ring(fd, I915_EXEC_BLT);
 
 
 	bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
-	if (!bufmgr) {
-		fprintf(stderr, "failed to init libdrm\n");
-		exit(-1);
-	}
+	igt_assert(bufmgr);
 	drm_intel_bufmgr_gem_enable_reuse(bufmgr);
 
 	batch = intel_batchbuffer_alloc(bufmgr, devid);
-	if (!batch) {
-		fprintf(stderr, "failed to create batch buffer\n");
-		exit(-1);
-	}
+	igt_assert(batch);
 
 	target_buffer = drm_intel_bo_alloc(bufmgr, "target bo", 4096, 4096);
-	if (!target_buffer) {
-		fprintf(stderr, "failed to alloc target buffer\n");
-		exit(-1);
-	}
+	igt_assert(target_buffer);
 
-	store_dword_loop();
+	store_dword_loop(fd);
 
 	drm_intel_bo_unreference(target_buffer);
 	intel_batchbuffer_free(batch);
 	drm_intel_bufmgr_destroy(bufmgr);
 
 	close(fd);
-
-	return 0;
 }

@@ -30,7 +30,23 @@
  */
 
 #include <pthread.h>
-#include "rendercopy.h"
+#include <stdlib.h>
+#include <sys/ioctl.h>
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <getopt.h>
+#include "drm.h"
+#include "ioctl_wrappers.h"
+#include "drmtest.h"
+#include "intel_bufmgr.h"
+#include "intel_batchbuffer.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
 
 /* options */
 int num_contexts = 10;
@@ -40,17 +56,16 @@ int iter = 10000;
 
 /* globals */
 pthread_t *threads;
-int *returns;
 int devid;
 int fd;
 
 static void init_buffer(drm_intel_bufmgr *bufmgr,
-			struct scratch_buf *buf,
+			struct igt_buf *buf,
 			uint32_t size)
 {
 	buf->bo = drm_intel_bo_alloc(bufmgr, "", size, 4096);
 	buf->size = size;
-	assert(buf->bo);
+	igt_assert(buf->bo);
 	buf->tiling = I915_TILING_NONE;
 	buf->stride = 4096;
 }
@@ -58,46 +73,42 @@ static void init_buffer(drm_intel_bufmgr *bufmgr,
 static void *work(void *arg)
 {
 	struct intel_batchbuffer *batch;
+	igt_render_copyfunc_t rendercopy = igt_get_render_copyfunc(devid);
 	drm_intel_context *context;
 	drm_intel_bufmgr *bufmgr;
-	int thread_id = *(int *)arg;
 	int td_fd;
 	int i;
 
 	if (multiple_fds)
-		td_fd = fd = drm_open_any();
+		td_fd = fd = drm_open_any_render();
 	else
 		td_fd = fd;
 
-	assert(td_fd >= 0);
+	igt_assert(td_fd >= 0);
 
 	bufmgr = drm_intel_bufmgr_gem_init(td_fd, 4096);
 	batch = intel_batchbuffer_alloc(bufmgr, devid);
 	context = drm_intel_gem_context_create(bufmgr);
-
-	if (!context) {
-		returns[thread_id] = 77;
-		goto out;
-	}
+	igt_require(context);
 
 	for (i = 0; i < iter; i++) {
-		struct scratch_buf src, dst;
+		struct igt_buf src, dst;
 
 		init_buffer(bufmgr, &src, 4096);
 		init_buffer(bufmgr, &dst, 4096);
 
 
 		if (uncontexted) {
-			gen6_render_copyfunc(batch, &src, 0, 0, 0, 0, &dst, 0, 0);
+			igt_assert(rendercopy);
+			rendercopy(batch, NULL, &src, 0, 0, 0, 0, &dst, 0, 0);
 		} else {
 			int ret;
 			ret = drm_intel_bo_subdata(batch->bo, 0, 4096, batch->buffer);
-			assert(ret == 0);
+			igt_assert(ret == 0);
 			intel_batchbuffer_flush_with_context(batch, context);
 		}
 	}
 
-out:
 	drm_intel_gem_context_destroy(context);
 	intel_batchbuffer_free(batch);
 	drm_intel_bufmgr_destroy(bufmgr);
@@ -105,7 +116,7 @@ out:
 	if (multiple_fds)
 		close(td_fd);
 
-	pthread_exit(&returns[thread_id]);
+	pthread_exit(NULL);
 }
 
 static void parse(int argc, char *argv[])
@@ -128,7 +139,7 @@ static void parse(int argc, char *argv[])
 		case 'h':
 		case '?':
 		default:
-			exit(EXIT_SUCCESS);
+			igt_success();
 			break;
 		}
 	}
@@ -138,29 +149,30 @@ int main(int argc, char *argv[])
 {
 	int i;
 
-	fd = drm_open_any();
+	igt_simple_init();
+
+	fd = drm_open_any_render();
 	devid = intel_get_drm_devid(fd);
+
+	if (igt_run_in_simulation()) {
+		num_contexts = 2;
+		iter = 4;
+	}
 
 	parse(argc, argv);
 
 	threads = calloc(num_contexts, sizeof(*threads));
-	returns = calloc(num_contexts, sizeof(*returns));
 
 	for (i = 0; i < num_contexts; i++)
 		pthread_create(&threads[i], NULL, work, &i);
 
 	for (i = 0; i < num_contexts; i++) {
-		int thread_status, ret;
 		void *retval;
-		ret = pthread_join(threads[i], &retval);
-		thread_status = *(int *)retval;
-		if (!ret && thread_status)
-			exit(thread_status);
+		igt_assert(pthread_join(threads[i], &retval) == 0);
 	}
 
-	free(returns);
 	free(threads);
 	close(fd);
 
-	exit(EXIT_SUCCESS);
+	return 0;
 }

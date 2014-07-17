@@ -26,7 +26,8 @@
 #include <err.h>
 #include <string.h>
 #include <stdbool.h>
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
 
 static uint32_t devid;
 static int gen;
@@ -349,7 +350,7 @@ int main(int argc, char** argv)
 
 	dev = intel_get_pci_device();
 	devid = dev->device_id;
-	intel_get_mmio(dev);
+	intel_mmio_use_pci_bar(dev);
 
 	if (IS_GEN7(devid))
 		gen = 7;

@@ -26,12 +26,17 @@
  */
 
 #define _GNU_SOURCE
+#include <ctype.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <err.h>
 #include <unistd.h>
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
+#include "intel_reg.h"
+#include "drmtest.h"
 
 static uint32_t devid = 0;
 
@@ -747,6 +752,9 @@ static struct reg_debug intel_debug_regs[] = {
 /*    DEFINEREG(UDIB_SHA_BLANK_CODES), CRL only */
 	DEFINEREG(SDVOUDI),
 	DEFINEREG(DSPARB),
+	DEFINEREG(FW_BLC),
+	DEFINEREG(FW_BLC2),
+	DEFINEREG(FW_BLC_SELF),
 	DEFINEREG(DSPFW1),
 	DEFINEREG(DSPFW2),
 	DEFINEREG(DSPFW3),
@@ -1569,10 +1577,437 @@ DEBUGSTRING(ilk_debug_pp_control)
 		 (val & (1 << 0)) ? "on" : "off");
 }
 
+DEBUGSTRING(hsw_debug_port_clk_sel)
+{
+	const char *clock = NULL;
+
+	switch ((val >> 29 ) & 7) {
+	case 0:
+		clock = "LCPLL 2700";
+		break;
+	case 1:
+		clock = "LCPLL 1350";
+		break;
+	case 2:
+		clock = "LCPLL 810";
+		break;
+	case 3:
+		clock = "SPLL";
+		break;
+	case 4:
+		clock = "WRPLL 1";
+		break;
+	case 5:
+		clock = "WRPLL 2";
+		break;
+	case 6:
+		clock = "Reserved";
+		break;
+	case 7:
+		clock = "None";
+		break;
+	}
+
+	snprintf(result, len, "%s", clock);
+}
+
+DEBUGSTRING(hsw_debug_pipe_clk_sel)
+{
+	const char *clock;
+
+	switch ((val >> 29) & 7) {
+	case 0:
+		clock = "None";
+		break;
+	case 2:
+		clock = "DDIB";
+		break;
+	case 3:
+		clock = "DDIC";
+		break;
+	case 4:
+		clock = "DDID";
+		break;
+	case 5:
+		clock = "DDIE";
+		break;
+	default:
+		clock = "Reserved";
+		break;
+	}
+
+	snprintf(result, len, "%s", clock);
+}
+
+DEBUGSTRING(hsw_debug_ddi_buf_ctl)
+{
+	const char *enable, *reversal, *width, *detected;
+
+	enable = (val & (1<<31)) ? "enabled" : "disabled";
+	reversal = (val & (1<<16)) ? "reversed" : "not reversed";
+
+	switch ((val >> 1) & 7) {
+	case 0:
+		width = "x1";
+		break;
+	case 1:
+		width = "x2";
+		break;
+	case 3:
+		width = "x4";
+		break;
+	default:
+		width = "reserved";
+		break;
+	}
+
+	detected = (val & 1) ? "detected" : "not detected";
+
+	snprintf(result, len, "%s %s %s %s", enable, reversal, width, detected);
+}
+
+DEBUGSTRING(hsw_debug_sfuse_strap)
+{
+	const char *display, *crt, *lane_reversal, *portb, *portc, *portd;
+
+	display = (val & (1<<7)) ? "disabled" : "enabled";
+	crt = (val & (1<<6)) ? "yes" : "no";
+	lane_reversal = (val & (1<<4)) ? "yes" : "no";
+	portb = (val & (1<<2)) ? "yes" : "no";
+	portc = (val & (1<<1)) ? "yes" : "no";
+	portd = (val & (1<<0)) ? "yes" : "no";
+
+	snprintf(result, len, "display %s, crt %s, lane reversal %s, "
+		 "port b %s, port c %s, port d %s", display, crt, lane_reversal,
+		 portb, portc, portd);
+}
+
+DEBUGSTRING(hsw_debug_pipe_ddi_func_ctl)
+{
+	const char *enable, *port, *mode, *bpc, *vsync, *hsync, *edp_input;
+	const char *width;
+
+	enable = (val & (1<<31)) ? "enabled" : "disabled";
+
+	switch ((val >> 28) & 7) {
+	case 0:
+		port = "no port";
+		break;
+	case 1:
+		port = "DDIB";
+		break;
+	case 2:
+		port = "DDIC";
+		break;
+	case 3:
+		port = "DDID";
+		break;
+	case 4:
+		port = "DDIE";
+		break;
+	default:
+		port = "port reserved";
+		break;
+	}
+
+	switch ((val >> 24) & 7) {
+	case 0:
+		mode = "HDMI";
+		break;
+	case 1:
+		mode = "DVI";
+		break;
+	case 2:
+		mode = "DP SST";
+		break;
+	case 3:
+		mode = "DP MST";
+		break;
+	case 4:
+		mode = "FDI";
+		break;
+	case 5:
+	default:
+		mode = "mode reserved";
+		break;
+	}
+
+	switch ((val >> 20) & 7) {
+	case 0:
+		bpc = "8 bpc";
+		break;
+	case 1:
+		bpc = "10 bpc";
+		break;
+	case 2:
+		bpc = "6 bpc";
+		break;
+	case 3:
+		bpc = "12 bpc";
+		break;
+	default:
+		bpc = "bpc reserved";
+		break;
+	}
+
+	hsync = (val & (1<<16)) ? "+HSync" : "-HSync";
+	vsync = (val & (1<<17)) ? "+VSync" : "-VSync";
+
+	switch ((val >> 12) & 7) {
+	case 0:
+		edp_input = "EDP A ON";
+		break;
+	case 4:
+		edp_input = "EDP A ONOFF";
+		break;
+	case 5:
+		edp_input = "EDP B ONOFF";
+		break;
+	case 6:
+		edp_input = "EDP C ONOFF";
+		break;
+	default:
+		edp_input = "EDP input reserved";
+		break;
+	}
+
+	switch ((val >> 1) & 7) {
+	case 0:
+		width = "x1";
+		break;
+	case 1:
+		width = "x2";
+		break;
+	case 3:
+		width = "x4";
+		break;
+	default:
+		width = "reserved width";
+		break;
+	}
+
+	snprintf(result, len, "%s, %s, %s, %s, %s, %s, %s, %s", enable,
+		 port, mode, bpc, vsync, hsync, edp_input, width);
+}
+
+DEBUGSTRING(hsw_debug_wm_pipe)
+{
+	uint32_t primary, sprite, cursor;
+
+	primary = (val >> 16) & 0x7F;
+	sprite = (val >> 8) & 0x7F;
+	cursor = val & 0x3F;
+
+	snprintf(result, len, "primary %d, sprite %d, pipe %d", primary,
+		 sprite, cursor);
+}
+
+DEBUGSTRING(hsw_debug_lp_wm)
+{
+	const char *enable;
+	uint32_t latency, fbc, pri, cur;
+
+	enable = ((val >> 31) & 1) ? "enabled" : "disabled";
+	latency = (val >> 24) & 0x7F;
+	fbc = (val >> 20) & 0xF;
+	pri = (val >> 8) & 0x3FF;
+	cur = val & 0xFF;
+
+	snprintf(result, len, "%s, latency %d, fbc %d, pri %d, cur %d",
+		 enable, latency, fbc, pri, cur);
+}
+
+DEBUGSTRING(hsw_debug_sinterrupt)
+{
+	int portd, portc, portb, crt;
+
+	portd = (val >> 23) & 1;
+	portc = (val >> 22) & 1;
+	portb = (val >> 21) & 1;
+	crt = (val >> 19) & 1;
+
+	snprintf(result, len, "port d:%d, port c:%d, port b:%d, crt:%d",
+		 portd, portc, portb, crt);
+}
+
+DEBUGSTRING(ilk_debug_blc_pwm_cpu_ctl2)
+{
+	int enable, blinking, granularity;
+	const char *pipe;
+
+	enable = (val >> 31) & 1;
+
+	if (IS_GEN5(devid) || IS_GEN6(devid)) {
+		pipe = ((val >> 29) & 1) ? "B" : "A";
+	} else {
+		switch ((val >> 29) & 3) {
+		case 0:
+			pipe = "A";
+			break;
+		case 1:
+			pipe = "B";
+			break;
+		case 2:
+			pipe = "C";
+			break;
+		case 3:
+			if (IS_IVYBRIDGE(devid))
+				pipe = "reserved";
+			else
+				pipe = "EDP";
+			break;
+		}
+	}
+
+	if (IS_GEN5(devid) || IS_GEN6(devid) || IS_IVYBRIDGE(devid)) {
+		snprintf(result, len, "enable %d, pipe %s", enable, pipe);
+	} else {
+		blinking = (val >> 28) & 1;
+		granularity = ((val >> 27) & 1) ? 8 : 128;
+
+		snprintf(result, len, "enable %d, pipe %s, blinking %d, "
+			 "granularity %d", enable, pipe, blinking,
+			 granularity);
+	}
+}
+
+DEBUGSTRING(ilk_debug_blc_pwm_cpu_ctl)
+{
+	int cycle, freq;
+
+	cycle = (val & 0xFFFF);
+
+	if (IS_GEN5(devid) || IS_GEN6(devid) || IS_IVYBRIDGE(devid)) {
+		snprintf(result, len, "cycle %d", cycle);
+	} else {
+		freq = (val >> 16) & 0xFFFF;
+
+		snprintf(result, len, "cycle %d, freq %d", cycle, freq);
+	}
+}
+
+DEBUGSTRING(ibx_debug_blc_pwm_ctl1)
+{
+	int enable, override, inverted_polarity;
+
+	enable = (val >> 31) & 1;
+	override = (val >> 30) & 1;
+	inverted_polarity = (val >> 29) & 1;
+
+	snprintf(result, len, "enable %d, override %d, inverted polarity %d",
+		 enable, override, inverted_polarity);
+}
+
+DEBUGSTRING(ibx_debug_blc_pwm_ctl2)
+{
+	int freq, cycle;
+
+	freq = (val >> 16) & 0xFFFF;
+	cycle = val & 0xFFFF;
+
+	snprintf(result, len, "freq %d, cycle %d", freq, cycle);
+}
+
+DEBUGSTRING(hsw_debug_blc_misc_ctl)
+{
+	const char *sel;
+
+	sel = (val & 1) ? "PWM1-CPU PWM2-PCH" : "PWM1-PCH PWM2-CPU";
+
+	snprintf(result, len, "%s", sel);
+}
+
+DEBUGSTRING(hsw_debug_util_pin_ctl)
+{
+	int enable, data, inverted_polarity;
+	const char *transcoder, *mode;
+
+	enable = (val >> 31) & 1;
+
+	switch ((val >> 29) & 3) {
+	case 0:
+		transcoder = "A";
+		break;
+	case 1:
+		transcoder = "B";
+		break;
+	case 2:
+		transcoder = "C";
+		break;
+	case 3:
+		transcoder = "EDP";
+		break;
+	}
+
+	switch ((val >> 24) & 0xF) {
+	case 0:
+		mode = "data";
+		break;
+	case 1:
+		mode = "PWM";
+		break;
+	case 4:
+		mode = "Vblank";
+		break;
+	case 5:
+		mode = "Vsync";
+		break;
+	default:
+		mode = "reserved";
+		break;
+	}
+
+	data = (val >> 23) & 1;
+	inverted_polarity = (val >> 22) & 1;
+
+	snprintf(result, len, "enable %d, transcoder %s, mode %s, data %d "
+		 "inverted polarity %d", enable, transcoder, mode, data,
+		 inverted_polarity);
+}
+
+static struct reg_debug gen6_fences[] = {
+#define DEFINEFENCE_SNB(i) \
+	{ FENCE_REG_SANDYBRIDGE_0 + (i) * 8, "FENCE START "#i, NULL, 0 }, \
+	{ FENCE_REG_SANDYBRIDGE_0 + (i) * 8 + 4, "FENCE END "#i, NULL, 0 }
+	DEFINEFENCE_SNB(0),
+	DEFINEFENCE_SNB(1),
+	DEFINEFENCE_SNB(2),
+	DEFINEFENCE_SNB(3),
+	DEFINEFENCE_SNB(4),
+	DEFINEFENCE_SNB(5),
+	DEFINEFENCE_SNB(6),
+	DEFINEFENCE_SNB(7),
+	DEFINEFENCE_SNB(8),
+	DEFINEFENCE_SNB(9),
+	DEFINEFENCE_SNB(10),
+	DEFINEFENCE_SNB(11),
+	DEFINEFENCE_SNB(12),
+	DEFINEFENCE_SNB(13),
+	DEFINEFENCE_SNB(14),
+	DEFINEFENCE_SNB(15),
+	DEFINEFENCE_SNB(16),
+	DEFINEFENCE_SNB(17),
+	DEFINEFENCE_SNB(18),
+	DEFINEFENCE_SNB(19),
+	DEFINEFENCE_SNB(20),
+	DEFINEFENCE_SNB(20),
+	DEFINEFENCE_SNB(21),
+	DEFINEFENCE_SNB(22),
+	DEFINEFENCE_SNB(23),
+	DEFINEFENCE_SNB(24),
+	DEFINEFENCE_SNB(25),
+	DEFINEFENCE_SNB(26),
+	DEFINEFENCE_SNB(27),
+	DEFINEFENCE_SNB(28),
+	DEFINEFENCE_SNB(29),
+	DEFINEFENCE_SNB(30),
+	DEFINEFENCE_SNB(31),
+};
+
 static struct reg_debug ironlake_debug_regs[] = {
 	DEFINEREG(PGETBL_CTL),
-	DEFINEREG(GEN6_INSTDONE_1),
-	DEFINEREG(GEN6_INSTDONE_2),
+	DEFINEREG(INSTDONE_I965),
+	DEFINEREG(INSTDONE_1),
 	DEFINEREG2(CPU_VGACNTRL, i830_debug_vgacntrl),
 	DEFINEREG(DIGITAL_PORT_HOTPLUG_CNTRL),
 
@@ -1775,6 +2210,16 @@ static struct reg_debug ironlake_debug_regs[] = {
 	DEFINEREG2(FDI_RXB_CTL, ironlake_debug_fdi_rx_ctl),
 	DEFINEREG2(FDI_RXC_CTL, ironlake_debug_fdi_rx_ctl),
 
+	DEFINEREG(DPAFE_BMFUNC),
+	DEFINEREG(DPAFE_DL_IREFCAL0),
+	DEFINEREG(DPAFE_DL_IREFCAL1),
+	DEFINEREG(DPAFE_DP_IREFCAL),
+
+	DEFINEREG(PCH_DSPCLK_GATE_D),
+	DEFINEREG(PCH_DSP_CHICKEN1),
+	DEFINEREG(PCH_DSP_CHICKEN2),
+	DEFINEREG(PCH_DSP_CHICKEN3),
+
 	DEFINEREG2(FDI_RXA_MISC, ironlake_debug_fdi_rx_misc),
 	DEFINEREG2(FDI_RXB_MISC, ironlake_debug_fdi_rx_misc),
 	DEFINEREG2(FDI_RXC_MISC, ironlake_debug_fdi_rx_misc),
@@ -1806,10 +2251,10 @@ static struct reg_debug ironlake_debug_regs[] = {
 	DEFINEREG2(TRANS_DP_CTL_B, snb_debug_trans_dp_ctl),
 	DEFINEREG2(TRANS_DP_CTL_C, snb_debug_trans_dp_ctl),
 
-	DEFINEREG(BLC_PWM_CPU_CTL2),
-	DEFINEREG(BLC_PWM_CPU_CTL),
-	DEFINEREG(BLC_PWM_PCH_CTL1),
-	DEFINEREG(BLC_PWM_PCH_CTL2),
+	DEFINEREG2(BLC_PWM_CPU_CTL2, ilk_debug_blc_pwm_cpu_ctl2),
+	DEFINEREG2(BLC_PWM_CPU_CTL, ilk_debug_blc_pwm_cpu_ctl),
+	DEFINEREG2(BLC_PWM_PCH_CTL1, ibx_debug_blc_pwm_ctl1),
+	DEFINEREG2(BLC_PWM_PCH_CTL2, ibx_debug_blc_pwm_ctl2),
 
 	DEFINEREG2(PCH_PP_STATUS, i830_debug_pp_status),
 	DEFINEREG2(PCH_PP_CONTROL, ilk_debug_pp_control),
@@ -1834,10 +2279,10 @@ static struct reg_debug haswell_debug_regs[] = {
 	DEFINEREG(HSW_PWR_WELL_CTL6),
 
 	/* DDI pipe function */
-	DEFINEREG(PIPE_DDI_FUNC_CTL_A),
-	DEFINEREG(PIPE_DDI_FUNC_CTL_B),
-	DEFINEREG(PIPE_DDI_FUNC_CTL_C),
-	DEFINEREG(PIPE_DDI_FUNC_CTL_EDP),
+	DEFINEREG2(PIPE_DDI_FUNC_CTL_A, hsw_debug_pipe_ddi_func_ctl),
+	DEFINEREG2(PIPE_DDI_FUNC_CTL_B, hsw_debug_pipe_ddi_func_ctl),
+	DEFINEREG2(PIPE_DDI_FUNC_CTL_C, hsw_debug_pipe_ddi_func_ctl),
+	DEFINEREG2(PIPE_DDI_FUNC_CTL_EDP, hsw_debug_pipe_ddi_func_ctl),
 
 	/* DP transport control */
 	DEFINEREG(DP_TP_CTL_A),
@@ -1847,46 +2292,184 @@ static struct reg_debug haswell_debug_regs[] = {
 	DEFINEREG(DP_TP_CTL_E),
 
 	/* DP status */
-	DEFINEREG(DP_TP_STATUS_A),
 	DEFINEREG(DP_TP_STATUS_B),
 	DEFINEREG(DP_TP_STATUS_C),
 	DEFINEREG(DP_TP_STATUS_D),
 	DEFINEREG(DP_TP_STATUS_E),
 
 	/* DDI buffer control */
-	DEFINEREG(DDI_BUF_CTL_A),
-	DEFINEREG(DDI_BUF_CTL_B),
-	DEFINEREG(DDI_BUF_CTL_C),
-	DEFINEREG(DDI_BUF_CTL_D),
-	DEFINEREG(DDI_BUF_CTL_E),
+	DEFINEREG2(DDI_BUF_CTL_A, hsw_debug_ddi_buf_ctl),
+	DEFINEREG2(DDI_BUF_CTL_B, hsw_debug_ddi_buf_ctl),
+	DEFINEREG2(DDI_BUF_CTL_C, hsw_debug_ddi_buf_ctl),
+	DEFINEREG2(DDI_BUF_CTL_D, hsw_debug_ddi_buf_ctl),
+	DEFINEREG2(DDI_BUF_CTL_E, hsw_debug_ddi_buf_ctl),
 
 	/* Clocks */
-	DEFINEREG(PIXCLK_GATE),
 	DEFINEREG(SPLL_CTL),
 	DEFINEREG(LCPLL_CTL),
 	DEFINEREG(WRPLL_CTL1),
 	DEFINEREG(WRPLL_CTL2),
 
 	/* DDI port clock control */
-	DEFINEREG(PORT_CLK_SEL_A),
-	DEFINEREG(PORT_CLK_SEL_B),
-	DEFINEREG(PORT_CLK_SEL_C),
-	DEFINEREG(PORT_CLK_SEL_D),
-	DEFINEREG(PORT_CLK_SEL_E),
+	DEFINEREG2(PORT_CLK_SEL_A, hsw_debug_port_clk_sel),
+	DEFINEREG2(PORT_CLK_SEL_B, hsw_debug_port_clk_sel),
+	DEFINEREG2(PORT_CLK_SEL_C, hsw_debug_port_clk_sel),
+	DEFINEREG2(PORT_CLK_SEL_D, hsw_debug_port_clk_sel),
+	DEFINEREG2(PORT_CLK_SEL_E, hsw_debug_port_clk_sel),
 
 	/* Pipe clock control */
-	DEFINEREG(PIPE_CLK_SEL_A),
-	DEFINEREG(PIPE_CLK_SEL_B),
-	DEFINEREG(PIPE_CLK_SEL_C),
+	DEFINEREG2(PIPE_CLK_SEL_A, hsw_debug_pipe_clk_sel),
+	DEFINEREG2(PIPE_CLK_SEL_B, hsw_debug_pipe_clk_sel),
+	DEFINEREG2(PIPE_CLK_SEL_C, hsw_debug_pipe_clk_sel),
 
-	/* Pipe line time */
+	/* Watermarks */
+	DEFINEREG2(WM_PIPE_A, hsw_debug_wm_pipe),
+	DEFINEREG2(WM_PIPE_B, hsw_debug_wm_pipe),
+	DEFINEREG2(WM_PIPE_C, hsw_debug_wm_pipe),
+	DEFINEREG2(WM_LP1, hsw_debug_lp_wm),
+	DEFINEREG2(WM_LP2, hsw_debug_lp_wm),
+	DEFINEREG2(WM_LP3, hsw_debug_lp_wm),
+	DEFINEREG(WM_LP1_SPR),
+	DEFINEREG(WM_LP2_SPR),
+	DEFINEREG(WM_LP3_SPR),
+	DEFINEREG(WM_MISC),
+	DEFINEREG(WM_SR_CNT),
 	DEFINEREG(PIPE_WM_LINETIME_A),
 	DEFINEREG(PIPE_WM_LINETIME_B),
 	DEFINEREG(PIPE_WM_LINETIME_C),
+	DEFINEREG(WM_DBG),
 
 	/* Fuses */
-	DEFINEREG(SFUSE_STRAP),
+	DEFINEREG2(SFUSE_STRAP, hsw_debug_sfuse_strap),
 
+	/* Pipe A */
+	DEFINEREG2(PIPEASRC, i830_debug_yxminus1),
+	DEFINEREG2(DSPACNTR, i830_debug_dspcntr),
+	DEFINEREG2(DSPASTRIDE, ironlake_debug_dspstride),
+	DEFINEREG(DSPASURF),
+	DEFINEREG2(DSPATILEOFF, i830_debug_xy),
+
+	/* Pipe B */
+	DEFINEREG2(PIPEBSRC, i830_debug_yxminus1),
+	DEFINEREG2(DSPBCNTR, i830_debug_dspcntr),
+	DEFINEREG2(DSPBSTRIDE, ironlake_debug_dspstride),
+	DEFINEREG(DSPBSURF),
+	DEFINEREG2(DSPBTILEOFF, i830_debug_xy),
+
+	/* Pipe C */
+	DEFINEREG2(PIPECSRC, i830_debug_yxminus1),
+	DEFINEREG2(DSPCCNTR, i830_debug_dspcntr),
+	DEFINEREG2(DSPCSTRIDE, ironlake_debug_dspstride),
+	DEFINEREG(DSPCSURF),
+	DEFINEREG2(DSPCTILEOFF, i830_debug_xy),
+
+	/* Transcoder A */
+	DEFINEREG2(PIPEACONF, i830_debug_pipeconf),
+	DEFINEREG2(HTOTAL_A, i830_debug_hvtotal),
+	DEFINEREG2(HBLANK_A, i830_debug_hvsyncblank),
+	DEFINEREG2(HSYNC_A, i830_debug_hvsyncblank),
+	DEFINEREG2(VTOTAL_A, i830_debug_hvtotal),
+	DEFINEREG2(VBLANK_A, i830_debug_hvsyncblank),
+	DEFINEREG2(VSYNC_A, i830_debug_hvsyncblank),
+	DEFINEREG(VSYNCSHIFT_A),
+	DEFINEREG2(PIPEA_DATA_M1, ironlake_debug_m_tu),
+	DEFINEREG2(PIPEA_DATA_N1, ironlake_debug_n),
+	DEFINEREG2(PIPEA_LINK_M1, ironlake_debug_n),
+	DEFINEREG2(PIPEA_LINK_N1, ironlake_debug_n),
+
+	/* Transcoder B */
+	DEFINEREG2(PIPEBCONF, i830_debug_pipeconf),
+	DEFINEREG2(HTOTAL_B, i830_debug_hvtotal),
+	DEFINEREG2(HBLANK_B, i830_debug_hvsyncblank),
+	DEFINEREG2(HSYNC_B, i830_debug_hvsyncblank),
+	DEFINEREG2(VTOTAL_B, i830_debug_hvtotal),
+	DEFINEREG2(VBLANK_B, i830_debug_hvsyncblank),
+	DEFINEREG2(VSYNC_B, i830_debug_hvsyncblank),
+	DEFINEREG(VSYNCSHIFT_B),
+	DEFINEREG2(PIPEB_DATA_M1, ironlake_debug_m_tu),
+	DEFINEREG2(PIPEB_DATA_N1, ironlake_debug_n),
+	DEFINEREG2(PIPEB_LINK_M1, ironlake_debug_n),
+	DEFINEREG2(PIPEB_LINK_N1, ironlake_debug_n),
+
+	/* Transcoder C */
+	DEFINEREG2(PIPECCONF, i830_debug_pipeconf),
+	DEFINEREG2(HTOTAL_C, i830_debug_hvtotal),
+	DEFINEREG2(HBLANK_C, i830_debug_hvsyncblank),
+	DEFINEREG2(HSYNC_C, i830_debug_hvsyncblank),
+	DEFINEREG2(VTOTAL_C, i830_debug_hvtotal),
+	DEFINEREG2(VBLANK_C, i830_debug_hvsyncblank),
+	DEFINEREG2(VSYNC_C, i830_debug_hvsyncblank),
+	DEFINEREG(VSYNCSHIFT_C),
+	DEFINEREG2(PIPEC_DATA_M1, ironlake_debug_m_tu),
+	DEFINEREG2(PIPEC_DATA_N1, ironlake_debug_n),
+	DEFINEREG2(PIPEC_LINK_M1, ironlake_debug_n),
+	DEFINEREG2(PIPEC_LINK_N1, ironlake_debug_n),
+
+	/* Transcoder EDP */
+	DEFINEREG2(PIPEEDPCONF, i830_debug_pipeconf),
+	DEFINEREG2(HTOTAL_EDP, i830_debug_hvtotal),
+	DEFINEREG2(HBLANK_EDP, i830_debug_hvsyncblank),
+	DEFINEREG2(HSYNC_EDP, i830_debug_hvsyncblank),
+	DEFINEREG2(VTOTAL_EDP, i830_debug_hvtotal),
+	DEFINEREG2(VBLANK_EDP, i830_debug_hvsyncblank),
+	DEFINEREG2(VSYNC_EDP, i830_debug_hvsyncblank),
+	DEFINEREG(VSYNCSHIFT_EDP),
+	DEFINEREG2(PIPEEDP_DATA_M1, ironlake_debug_m_tu),
+	DEFINEREG2(PIPEEDP_DATA_N1, ironlake_debug_n),
+	DEFINEREG2(PIPEEDP_LINK_M1, ironlake_debug_n),
+	DEFINEREG2(PIPEEDP_LINK_N1, ironlake_debug_n),
+
+	/* Panel fitter */
+	DEFINEREG2(PFA_CTL_1, ironlake_debug_panel_fitting),
+	DEFINEREG2(PFA_WIN_POS, ironlake_debug_pf_win),
+	DEFINEREG2(PFA_WIN_SIZE, ironlake_debug_pf_win),
+
+	DEFINEREG2(PFB_CTL_1, ironlake_debug_panel_fitting),
+	DEFINEREG2(PFB_WIN_POS, ironlake_debug_pf_win),
+	DEFINEREG2(PFB_WIN_SIZE, ironlake_debug_pf_win),
+
+	DEFINEREG2(PFC_CTL_1, ironlake_debug_panel_fitting),
+	DEFINEREG2(PFC_WIN_POS, ironlake_debug_pf_win),
+	DEFINEREG2(PFC_WIN_SIZE, ironlake_debug_pf_win),
+
+	/* LPT */
+
+	DEFINEREG2(TRANS_HTOTAL_A, i830_debug_hvtotal),
+	DEFINEREG2(TRANS_HBLANK_A, i830_debug_hvsyncblank),
+	DEFINEREG2(TRANS_HSYNC_A, i830_debug_hvsyncblank),
+	DEFINEREG2(TRANS_VTOTAL_A, i830_debug_hvtotal),
+	DEFINEREG2(TRANS_VBLANK_A, i830_debug_hvsyncblank),
+	DEFINEREG2(TRANS_VSYNC_A, i830_debug_hvsyncblank),
+	DEFINEREG(TRANS_VSYNCSHIFT_A),
+
+	DEFINEREG2(TRANSACONF, ironlake_debug_transconf),
+
+	DEFINEREG2(FDI_RXA_MISC, ironlake_debug_fdi_rx_misc),
+	DEFINEREG(FDI_RXA_TUSIZE1),
+	DEFINEREG(FDI_RXA_IIR),
+	DEFINEREG(FDI_RXA_IMR),
+
+	DEFINEREG2(BLC_PWM_CPU_CTL2, ilk_debug_blc_pwm_cpu_ctl2),
+	DEFINEREG2(BLC_PWM_CPU_CTL, ilk_debug_blc_pwm_cpu_ctl),
+	DEFINEREG2(BLC_PWM2_CPU_CTL2, ilk_debug_blc_pwm_cpu_ctl2),
+	DEFINEREG2(BLC_PWM2_CPU_CTL, ilk_debug_blc_pwm_cpu_ctl),
+	DEFINEREG2(BLC_MISC_CTL, hsw_debug_blc_misc_ctl),
+	DEFINEREG2(BLC_PWM_PCH_CTL1, ibx_debug_blc_pwm_ctl1),
+	DEFINEREG2(BLC_PWM_PCH_CTL2, ibx_debug_blc_pwm_ctl2),
+
+	DEFINEREG2(UTIL_PIN_CTL, hsw_debug_util_pin_ctl),
+
+	DEFINEREG2(PCH_PP_STATUS, i830_debug_pp_status),
+	DEFINEREG2(PCH_PP_CONTROL, ilk_debug_pp_control),
+	DEFINEREG(PCH_PP_ON_DELAYS),
+	DEFINEREG(PCH_PP_OFF_DELAYS),
+	DEFINEREG(PCH_PP_DIVISOR),
+
+	DEFINEREG(PIXCLK_GATE),
+
+	DEFINEREG2(SDEISR, hsw_debug_sinterrupt),
+
+	DEFINEREG(RC6_RESIDENCY_TIME),
 };
 
 static struct reg_debug i945gm_mi_regs[] = {
@@ -1896,7 +2479,7 @@ static struct reg_debug i945gm_mi_regs[] = {
 	DEFINEREG(HWS_PGA),
 	DEFINEREG(IPEIR),
 	DEFINEREG(IPEHR),
-	DEFINEREG(INST_DONE),
+	DEFINEREG(INSTDONE),
 	DEFINEREG(NOP_ID),
 	DEFINEREG(HWSTAM),
 	DEFINEREG(SCPD0),
@@ -1911,26 +2494,31 @@ static struct reg_debug i945gm_mi_regs[] = {
 	DEFINEREG(ECOSKPD),
 };
 
+static void
+_intel_dump_reg(struct reg_debug *reg, uint32_t val)
+{
+	char debug[1024];
+
+	if (reg->debug_output != NULL) {
+		reg->debug_output(debug, sizeof(debug), reg->reg, val);
+		printf("%30.30s: 0x%08x (%s)\n",
+		       reg->name, val, debug);
+	} else {
+		printf("%30.30s: 0x%08x\n", reg->name, val);
+	}
+}
+
 #define intel_dump_regs(regs) _intel_dump_regs(regs, ARRAY_SIZE(regs))
 
 static void
 _intel_dump_regs(struct reg_debug *regs, int count)
 {
-	char debug[1024];
 	int i;
 
 	for (i = 0; i < count; i++) {
 		uint32_t val = INREG(regs[i].reg);
 
-		if (regs[i].debug_output != NULL) {
-			regs[i].debug_output(debug, sizeof(debug), regs[i].reg, val);
-			printf("%30.30s: 0x%08x (%s)\n",
-			       regs[i].name,
-			       (unsigned int)val, debug);
-		} else {
-			printf("%30.30s: 0x%08x\n", regs[i].name,
-			       (unsigned int)val);
-		}
+		_intel_dump_reg(&regs[i], val);
 	}
 }
 
@@ -1963,6 +2551,93 @@ static struct reg_debug gen6_rp_debug_regs[] = {
 	DEFINEREG(GEN6_PMIMR),
 	DEFINEREG(GEN6_PMINTRMSK),
 };
+
+#define DECLARE_REGS(d,r)	\
+	{ .description = d, .regs = r, .count = ARRAY_SIZE(r) }
+static struct {
+	const char *description;
+	struct reg_debug *regs;
+	int count;
+} known_registers[] = {
+	DECLARE_REGS("Gen5",   ironlake_debug_regs),
+	DECLARE_REGS("i945GM", i945gm_mi_regs),
+	DECLARE_REGS("Gen2",   intel_debug_regs),
+	DECLARE_REGS("Gen6",   gen6_rp_debug_regs),
+	DECLARE_REGS("Gen7.5", haswell_debug_regs),
+	DECLARE_REGS("Gen6+", gen6_fences),
+};
+#undef DECLARE_REGS
+
+static void
+dump_reg(struct reg_debug *reg, uint32_t val, const char *prefix)
+{
+	char debug[1024];
+
+	if (reg->debug_output != NULL) {
+		reg->debug_output(debug, sizeof(debug), reg->reg, val);
+		printf("%s: %s (0x%x): 0x%08x (%s)\n",
+		       prefix, reg->name, reg->reg, val, debug);
+	} else {
+		printf("%s: %s (0x%x): 0x%08x\n",
+		       prefix, reg->name, reg->reg, val);
+	}
+}
+
+static void
+str_to_upper(char *str)
+{
+	while(*str) {
+		*str = toupper(*str);
+		str++;
+	}
+}
+
+static void
+decode_register_name(char *name, uint32_t val)
+{
+	int i, j;
+
+	str_to_upper(name);
+
+	for (i = 0; i < ARRAY_SIZE(known_registers); i++) {
+		struct reg_debug *regs = known_registers[i].regs;
+
+		for (j = 0; j < known_registers[i].count; j++)
+			if (strstr(regs[j].name, name))
+				dump_reg(&regs[j], val,
+					 known_registers[i].description);
+	}
+}
+
+static void
+decode_register_address(int address, uint32_t val)
+{
+	int i, j;
+
+	for (i = 0; i < ARRAY_SIZE(known_registers); i++) {
+		struct reg_debug *regs = known_registers[i].regs;
+
+		for (j = 0; j < known_registers[i].count; j++)
+			if (regs[j].reg == address)
+				dump_reg(&regs[j], val,
+					 known_registers[i].description);
+	}
+}
+
+static void
+decode_register(char *name, uint32_t val)
+{
+	long int address;
+	char *end;
+
+	address = strtoul(name, &end, 0);
+
+	/* found a register address */
+	if (address && *end == '\0')
+		decode_register_address(address, val);
+	else
+		decode_register_name(name, val);
+}
 
 static void
 intel_dump_other_regs(void)
@@ -2158,7 +2833,7 @@ intel_dump_other_regs(void)
 		} else {
 			n = ((fp >> 16) & 0x3f);
 			m2 = ((fp >> 0) & 0x3f);
-			m = 5 * (m1 + 2) + (m2 + 2);
+			//m = 5 * (m1 + 2) + (m2 + 2);
 			dot =
 			    (ref * (5 * (m1 + 2) + (m2 + 2)) / (n + 2)) / (p1 *
 									   p2);
@@ -2169,9 +2844,47 @@ intel_dump_other_regs(void)
 	}
 }
 
+/*
+ * This program reads a lot of display registers. If we don't turn on the power
+ * well, dmesg will get flooded with tons of messages about unclaimed registers.
+ * So here we enable the "Debug" power well register and then restore its state
+ * later. It's impossible to guarantee that other things won't mess with the
+ * debug register between our put and get calls, but at least we're trying our
+ * best to keep things working fine, and it's the debug register anyway.
+ */
+static uint32_t power_well_get(void)
+{
+	uint32_t ret;
+	int i;
+
+	if (!IS_HASWELL(devid))
+		return 0;
+
+	ret = INREG(HSW_PWR_WELL_CTL4) & HSW_PWR_WELL_ENABLE_REQUEST;
+
+	OUTREG(HSW_PWR_WELL_CTL4, HSW_PWR_WELL_ENABLE_REQUEST);
+
+	for (i = 0; i < 20; i++) {
+		if (INREG(HSW_PWR_WELL_CTL4) & HSW_PWR_WELL_STATE_ENABLED)
+			break;
+		usleep(1000);
+	}
+
+	return ret;
+}
+
+static void power_well_put(uint32_t power_well)
+{
+	if (!IS_HASWELL(devid))
+		return;
+
+	OUTREG(HSW_PWR_WELL_CTL4, power_well);
+}
+
 static void print_usage(void)
 {
 	printf("Usage: intel_reg_dumper [options] [file]\n"
+	       "       intel_reg_dumper [options] register value\n"
 	       "Options:\n"
 	       "  -d id   when a dump file is used, use 'id' as device id (in "
 	       "hex)\n"
@@ -2181,8 +2894,9 @@ static void print_usage(void)
 int main(int argc, char** argv)
 {
 	struct pci_device *pci_dev;
-	int opt;
-	char *file = NULL;
+	int opt, n_args;
+	char *file = NULL, *reg_name = NULL;
+	uint32_t reg_val, power_well;
 
 	while ((opt = getopt(argc, argv, "d:h")) != -1) {
 		switch (opt) {
@@ -2197,21 +2911,41 @@ int main(int argc, char** argv)
 			return 1;
 		}
 	}
-	if (optind < argc)
+
+	n_args = argc - optind;
+	if (n_args == 1) {
 		file = argv[optind];
+	} else if (n_args == 2) {
+		reg_name = argv[optind];
+		reg_val = strtoul(argv[optind + 1], NULL, 0);
+	} else if (n_args) {
+		print_usage();
+		return 1;
+	}
+
+	/* the tool operates in "single" mode, decode a single register given
+	 * on the command line: intel_reg_dumper PCH_PP_CONTROL 0xabcd0002 */
+	if (reg_name) {
+		decode_register(reg_name, reg_val);
+		return 0;
+	}
 
 	if (file) {
-		intel_map_file(file);
+		intel_mmio_use_dump_file(file);
 		if (devid) {
 			if (IS_GEN5(devid))
-				pch = PCH_IBX;
+				intel_pch = PCH_IBX;
+			else if (IS_GEN6(devid) || IS_IVYBRIDGE(devid))
+				intel_pch = PCH_CPT;
+			else if (IS_HASWELL(devid))
+				intel_pch = PCH_LPT;
 			else
-				pch = PCH_CPT;
+				intel_pch = PCH_NONE;
 		} else {
 			printf("Dumping from file without -d argument. "
 			       "Assuming Ironlake machine.\n");
 			devid = 0x0042;
-			pch = PCH_IBX;
+			intel_pch = PCH_IBX;
 		}
 	} else {
 		pci_dev = intel_get_pci_device();
@@ -2223,7 +2957,11 @@ int main(int argc, char** argv)
 			intel_check_pch();
 	}
 
-	if (HAS_PCH_SPLIT(devid)) {
+	power_well = power_well_get();
+
+	if (IS_HASWELL(devid) || IS_BROADWELL(devid)) {
+		intel_dump_regs(haswell_debug_regs);
+	} else if (IS_GEN5(devid) || IS_GEN6(devid) || IS_IVYBRIDGE(devid)) {
 		intel_dump_regs(ironlake_debug_regs);
 	} else if (IS_945GM(devid)) {
 		intel_dump_regs(i945gm_mi_regs);
@@ -2234,12 +2972,12 @@ int main(int argc, char** argv)
 		intel_dump_other_regs();
 	}
 
-	if (IS_GEN6(devid) || IS_GEN7(devid))
+	if (IS_GEN6(devid) || IS_GEN7(devid)) {
+		intel_dump_regs(gen6_fences);
 		intel_dump_regs(gen6_rp_debug_regs);
+	}
 
-	if (IS_HASWELL(devid))
-		intel_dump_regs(haswell_debug_regs);
-
+	power_well_put(power_well);
 
 	intel_register_access_fini();
 	return 0;

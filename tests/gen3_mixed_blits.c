@@ -36,18 +36,17 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include <sys/mman.h>
 #include <sys/ioctl.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
 
 #include "i915_reg.h"
 #include "i915_3d.h"
@@ -268,11 +267,11 @@ render_copy(int fd,
 	if ((b - batch) & 1)
 		*b++ = 0;
 
-	assert(b - batch <= 1024);
+	igt_assert(b - batch <= 1024);
 	handle = gem_create(fd, 4096);
 	gem_write(fd, handle, 0, batch, (b-batch)*sizeof(batch[0]));
 
-	assert(r-reloc == 2);
+	igt_assert(r-reloc == 2);
 
 	tiling_bits = 0;
 	if (use_fence)
@@ -320,7 +319,7 @@ render_copy(int fd,
 		drmCommandNone(fd, DRM_I915_GEM_THROTTLE);
 		ret = drmIoctl(fd, DRM_IOCTL_I915_GEM_EXECBUFFER2, &exec);
 	}
-	assert(ret == 0);
+	igt_assert(ret == 0);
 
 	gem_close(fd, handle);
 }
@@ -336,7 +335,7 @@ static void blt_copy(int fd, uint32_t dst, uint32_t src)
 
 	*b++ = (XY_SRC_COPY_BLT_CMD |
 		XY_SRC_COPY_BLT_WRITE_ALPHA |
-		XY_SRC_COPY_BLT_WRITE_RGB);
+		XY_SRC_COPY_BLT_WRITE_RGB | 6);
 	*b++ = 3 << 24 | 0xcc << 16 | WIDTH * 4;
 	*b++ = 0;
 	*b++ = HEIGHT << 16 | WIDTH;
@@ -350,11 +349,11 @@ static void blt_copy(int fd, uint32_t dst, uint32_t src)
 	if ((b - batch) & 1)
 		*b++ = 0;
 
-	assert(b - batch <= 1024);
+	igt_assert(b - batch <= 1024);
 	handle = gem_create(fd, 4096);
 	gem_write(fd, handle, 0, batch, (b-batch)*sizeof(batch[0]));
 
-	assert(r-reloc == 2);
+	igt_assert(r-reloc == 2);
 
 	obj[0].handle = dst;
 	obj[0].relocation_count = 0;
@@ -398,7 +397,7 @@ static void blt_copy(int fd, uint32_t dst, uint32_t src)
 		drmCommandNone(fd, DRM_I915_GEM_THROTTLE);
 		ret = drmIoctl(fd, DRM_IOCTL_I915_GEM_EXECBUFFER2, &exec);
 	}
-	assert(ret == 0);
+	igt_assert(ret == 0);
 
 	gem_close(fd, handle);
 }
@@ -432,7 +431,7 @@ create_bo(int fd, uint32_t val, int tiling)
 
 	/* Fill the BO with dwords starting at val */
 	v = gem_mmap(fd, handle, WIDTH*HEIGHT*4, PROT_READ | PROT_WRITE);
-	assert(v);
+	igt_assert(v);
 	for (i = 0; i < WIDTH*HEIGHT; i++)
 		v[i] = val++;
 	munmap(v, WIDTH*HEIGHT*4);
@@ -447,14 +446,12 @@ check_bo(int fd, uint32_t handle, uint32_t val)
 	int i;
 
 	v = gem_mmap(fd, handle, WIDTH*HEIGHT*4, PROT_READ);
-	assert(v);
+	igt_assert(v);
 	for (i = 0; i < WIDTH*HEIGHT; i++) {
-		if (v[i] != val) {
-			fprintf(stderr, "Expected 0x%08x, found 0x%08x "
-				"at offset 0x%08x\n",
-				val, v[i], i * 4);
-			abort();
-		}
+		igt_assert_f(v[i] == val,
+			     "Expected 0x%08x, found 0x%08x "
+			     "at offset 0x%08x\n",
+			     val, v[i], i * 4);
 		val++;
 	}
 	munmap(v, WIDTH*HEIGHT*4);
@@ -466,19 +463,18 @@ int main(int argc, char **argv)
 	uint32_t start = 0;
 	int i, fd, count;
 
+	igt_simple_init();
+
 	fd = drm_open_any();
 
-	if (!IS_GEN3(intel_get_drm_devid(fd))) {
-		printf("gen3-only test, doing nothing\n");
-		return 77;
-	}
+	igt_require(IS_GEN3(intel_get_drm_devid(fd)));
 
 	count = 0;
 	if (argc > 1)
 		count = atoi(argv[1]);
 	if (count == 0)
 		count = 3 * gem_aperture_size(fd) / (1024*1024) / 2;
-	printf("Using %d 1MiB buffers\n", count);
+	igt_info("Using %d 1MiB buffers\n", count);
 
 	handle = malloc(sizeof(uint32_t)*count*3);
 	tiling = handle + count;
@@ -490,12 +486,12 @@ int main(int argc, char **argv)
 		start += 1024 * 1024 / 4;
 	}
 
-	printf("Verifying initialisation..."); fflush(stdout);
+	igt_info("Verifying initialisation..."); fflush(stdout);
 	for (i = 0; i < count; i++)
 		check_bo(fd, handle[i], start_val[i]);
-	printf("done\n");
+	igt_info("done\n");
 
-	printf("Cyclic blits, forward..."); fflush(stdout);
+	igt_info("Cyclic blits, forward..."); fflush(stdout);
 	for (i = 0; i < count * 32; i++) {
 		int src = i % count;
 		int dst = (i + 1) % count;
@@ -503,12 +499,12 @@ int main(int argc, char **argv)
 		copy(fd, handle[dst], tiling[dst], handle[src], tiling[src]);
 		start_val[dst] = start_val[src];
 	}
-	printf("verifying..."); fflush(stdout);
+	igt_info("verifying..."); fflush(stdout);
 	for (i = 0; i < count; i++)
 		check_bo(fd, handle[i], start_val[i]);
-	printf("done\n");
+	igt_info("done\n");
 
-	printf("Cyclic blits, backward..."); fflush(stdout);
+	igt_info("Cyclic blits, backward..."); fflush(stdout);
 	for (i = 0; i < count * 32; i++) {
 		int src = (i + 1) % count;
 		int dst = i % count;
@@ -516,12 +512,12 @@ int main(int argc, char **argv)
 		copy(fd, handle[dst], tiling[dst], handle[src], tiling[src]);
 		start_val[dst] = start_val[src];
 	}
-	printf("verifying..."); fflush(stdout);
+	igt_info("verifying..."); fflush(stdout);
 	for (i = 0; i < count; i++)
 		check_bo(fd, handle[i], start_val[i]);
-	printf("done\n");
+	igt_info("done\n");
 
-	printf("Random blits..."); fflush(stdout);
+	igt_info("Random blits..."); fflush(stdout);
 	for (i = 0; i < count * 32; i++) {
 		int src = random() % count;
 		int dst = random() % count;
@@ -532,10 +528,10 @@ int main(int argc, char **argv)
 			copy(fd, handle[dst], tiling[dst], handle[src], tiling[src]);
 		start_val[dst] = start_val[src];
 	}
-	printf("verifying..."); fflush(stdout);
+	igt_info("verifying..."); fflush(stdout);
 	for (i = 0; i < count; i++)
 		check_bo(fd, handle[i], start_val[i]);
-	printf("done\n");
+	igt_info("done\n");
 
 	return 0;
 }

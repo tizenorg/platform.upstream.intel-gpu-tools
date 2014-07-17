@@ -37,18 +37,19 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include "drm.h"
-#include "i915_drm.h"
+
+#include <drm.h>
+
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
-#include "intel_bufmgr.h"
-#include "intel_batchbuffer.h"
-#include "intel_gpu_tools.h"
+#include "intel_chipset.h"
+#include "intel_io.h"
+#include "igt_aux.h"
 
 static drm_intel_bufmgr *bufmgr;
 struct intel_batchbuffer *batch;
@@ -87,13 +88,10 @@ verify_large_read(drm_intel_bo *bo, uint32_t val)
 	drm_intel_bo_get_subdata(bo, 0, size, buf);
 
 	for (i = 0; i < size / 4; i++) {
-		if (buf[i] != val) {
-			fprintf(stderr,
-				"Unexpected value 0x%08x instead of "
-				"0x%08x at offset 0x%08x (%p)\n",
-				buf[i], val, i * 4, buf);
-			abort();
-		}
+		igt_assert_f(buf[i] == val,
+			     "Unexpected value 0x%08x instead of "
+			     "0x%08x at offset 0x%08x (%p)\n",
+			     buf[i], val, i * 4, buf);
 		val++;
 	}
 }
@@ -112,64 +110,126 @@ verify_small_read(drm_intel_bo *bo, uint32_t val)
 		drm_intel_bo_get_subdata(bo, offset, PAGE_SIZE, buf);
 
 		for (i = 0; i < PAGE_SIZE; i += 4) {
-			if (buf[i / 4] != val) {
-				fprintf(stderr,
-					"Unexpected value 0x%08x instead of "
-					"0x%08x at offset 0x%08x\n",
-					buf[i / 4], val, i * 4);
-				abort();
-			}
+			igt_assert_f(buf[i / 4] == val,
+				     "Unexpected value 0x%08x instead of "
+				     "0x%08x at offset 0x%08x\n",
+				     buf[i / 4], val, i * 4);
 			val++;
 		}
 	}
 }
 
-int
-main(int argc, char **argv)
+static void do_test(int fd, int cache_level,
+		    drm_intel_bo *src[2],
+		    const uint32_t start[2],
+		    drm_intel_bo *tmp[2],
+		    int loop)
 {
-	int fd;
-	drm_intel_bo *src1, *src2, *bo;
-	uint32_t start1 = 0;
-	uint32_t start2 = 1024 * 1024 / 4;
+	if (cache_level != -1) {
+		gem_set_caching(fd, tmp[0]->handle, cache_level);
+		gem_set_caching(fd, tmp[1]->handle, cache_level);
+	}
 
-	fd = drm_open_any();
+	do {
+		/* First, do a full-buffer read after blitting */
+		intel_copy_bo(batch, tmp[0], src[0], width*height*4);
+		verify_large_read(tmp[0], start[0]);
+		intel_copy_bo(batch, tmp[0], src[1], width*height*4);
+		verify_large_read(tmp[0], start[1]);
 
-	bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
-	drm_intel_bufmgr_gem_enable_reuse(bufmgr);
-	batch = intel_batchbuffer_alloc(bufmgr, intel_get_drm_devid(fd));
+		intel_copy_bo(batch, tmp[0], src[0], width*height*4);
+		verify_small_read(tmp[0], start[0]);
+		intel_copy_bo(batch, tmp[0], src[1], width*height*4);
+		verify_small_read(tmp[0], start[1]);
 
-	src1 = create_bo(start1);
-	src2 = create_bo(start2);
+		intel_copy_bo(batch, tmp[0], src[0], width*height*4);
+		verify_large_read(tmp[0], start[0]);
 
-	bo = drm_intel_bo_alloc(bufmgr, "dst bo", size, 4096);
+		intel_copy_bo(batch, tmp[0], src[0], width*height*4);
+		intel_copy_bo(batch, tmp[1], src[1], width*height*4);
+		verify_large_read(tmp[0], start[0]);
+		verify_large_read(tmp[1], start[1]);
 
-	/* First, do a full-buffer read after blitting */
-	printf("Large read after blit 1\n");
-	intel_copy_bo(batch, bo, src1, width, height);
-	verify_large_read(bo, start1);
-	printf("Large read after blit 2\n");
-	intel_copy_bo(batch, bo, src2, width, height);
-	verify_large_read(bo, start2);
+		intel_copy_bo(batch, tmp[0], src[0], width*height*4);
+		intel_copy_bo(batch, tmp[1], src[1], width*height*4);
+		verify_large_read(tmp[1], start[1]);
+		verify_large_read(tmp[0], start[0]);
 
-	printf("Small reads after blit 1\n");
-	intel_copy_bo(batch, bo, src1, width, height);
-	verify_small_read(bo, start1);
-	printf("Small reads after blit 2\n");
-	intel_copy_bo(batch, bo, src2, width, height);
-	verify_small_read(bo, start2);
+		intel_copy_bo(batch, tmp[1], src[0], width*height*4);
+		intel_copy_bo(batch, tmp[0], src[1], width*height*4);
+		verify_large_read(tmp[0], start[1]);
+		verify_large_read(tmp[1], start[0]);
+	} while (--loop);
+}
 
-	printf("Large read after blit 3\n");
-	intel_copy_bo(batch, bo, src1, width, height);
-	verify_large_read(bo, start1);
+drm_intel_bo *src[2], *dst[2];
+int fd;
 
-	drm_intel_bo_unreference(src1);
-	drm_intel_bo_unreference(src2);
-	drm_intel_bo_unreference(bo);
+igt_main
+{
+	const uint32_t start[2] = {0, 1024 * 1024 / 4};
 
-	intel_batchbuffer_free(batch);
-	drm_intel_bufmgr_destroy(bufmgr);
+	igt_skip_on_simulation();
+
+	igt_fixture {
+		fd = drm_open_any();
+
+		bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
+		drm_intel_bufmgr_gem_enable_reuse(bufmgr);
+		batch = intel_batchbuffer_alloc(bufmgr, intel_get_drm_devid(fd));
+
+		src[0] = create_bo(start[0]);
+		src[1] = create_bo(start[1]);
+
+		dst[0] = drm_intel_bo_alloc(bufmgr, "dst bo", size, 4096);
+		dst[1] = drm_intel_bo_alloc(bufmgr, "dst bo", size, 4096);
+	}
+
+	igt_subtest("normal")
+		do_test(fd, -1, src, start, dst, 1);
+
+	igt_subtest("interruptible") {
+		igt_fork_signal_helper();
+		do_test(fd, -1, src, start, dst, 100);
+		igt_stop_signal_helper();
+	}
+
+	igt_subtest("normal-uncached")
+		do_test(fd, 0, src, start, dst, 1);
+
+	igt_subtest("interruptible-uncached") {
+		igt_fork_signal_helper();
+		do_test(fd, 0, src, start, dst, 100);
+		igt_stop_signal_helper();
+	}
+
+	igt_subtest("normal-snoop")
+		do_test(fd, 1, src, start, dst, 1);
+
+	igt_subtest("interruptible-snoop") {
+		igt_fork_signal_helper();
+		do_test(fd, 1, src, start, dst, 100);
+		igt_stop_signal_helper();
+	}
+
+	igt_subtest("normal-display")
+		do_test(fd, 2, src, start, dst, 1);
+
+	igt_subtest("interruptible-display") {
+		igt_fork_signal_helper();
+		do_test(fd, 2, src, start, dst, 100);
+		igt_stop_signal_helper();
+	}
+
+	igt_fixture {
+		drm_intel_bo_unreference(src[0]);
+		drm_intel_bo_unreference(src[1]);
+		drm_intel_bo_unreference(dst[0]);
+		drm_intel_bo_unreference(dst[1]);
+
+		intel_batchbuffer_free(batch);
+		drm_intel_bufmgr_destroy(bufmgr);
+	}
 
 	close(fd);
-
-	return 0;
 }

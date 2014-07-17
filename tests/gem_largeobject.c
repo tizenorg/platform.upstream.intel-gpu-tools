@@ -28,14 +28,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 
 /* Should take 64 pages to store the page pointers on 64 bit */
@@ -49,7 +48,7 @@ test_large_object(int fd)
 	struct drm_i915_gem_create create;
 	struct drm_i915_gem_pin pin;
 	uint32_t obj_size;
-	int ret;
+	char *ptr;
 
 	memset(&create, 0, sizeof(create));
 	memset(&pin, 0, sizeof(pin));
@@ -61,35 +60,26 @@ test_large_object(int fd)
 	else
 		obj_size = OBJ_SIZE;
 	create.size = obj_size;
-	printf("obj size %i\n", obj_size);
+	igt_info("obj size %i\n", obj_size);
 
-	ret = ioctl(fd, DRM_IOCTL_I915_GEM_CREATE, &create);
-	if (ret) {
-		fprintf(stderr, "object creation failed: %s\n",
-			strerror(errno));
-		exit(ret);
-	}
+	igt_assert(ioctl(fd, DRM_IOCTL_I915_GEM_CREATE, &create) == 0);
 
-	pin.handle = create.handle;
-	ret = ioctl(fd, DRM_IOCTL_I915_GEM_PIN, &pin);
-	if (ret) {
-		fprintf(stderr, "pin failed: %s\n",
-			strerror(errno));
-		exit(ret);
-	}
+	/* prefault */
+	ptr = gem_mmap__gtt(fd, create.handle, obj_size, PROT_WRITE | PROT_READ);
+	*ptr = 0;
 
 	gem_write(fd, create.handle, 0, data, obj_size);
 
 	/* kernel should clean this up for us */
 }
 
-int main(int argc, char **argv)
+igt_simple_main
 {
 	int fd;
+
+	igt_skip_on_simulation();
 
 	fd = drm_open_any();
 
 	test_large_object(fd);
-
-	return 0;
 }

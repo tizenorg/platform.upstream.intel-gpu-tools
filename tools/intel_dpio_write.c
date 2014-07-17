@@ -30,7 +30,8 @@
 #include <stdio.h>
 #include <err.h>
 #include <string.h>
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
 
 static void usage(char *cmdname)
 {
@@ -57,7 +58,9 @@ int main(int argc, char** argv)
 
 	intel_register_access_init(dev, 0);
 
-	intel_dpio_reg_write(reg, val);
+	printf("Value before: 0x%08x\n", intel_dpio_reg_read(reg, 0));
+	intel_dpio_reg_write(reg, val, 0);
+	printf("Value after: 0x%08x\n", intel_dpio_reg_read(reg, 0));
 
 	intel_register_access_fini();
 

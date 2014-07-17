@@ -28,19 +28,19 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 #include "intel_bufmgr.h"
 #include "intel_batchbuffer.h"
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
 #include "i830_reg.h"
+#include "intel_chipset.h"
 
 static drm_intel_bufmgr *bufmgr;
 struct intel_batchbuffer *batch;
@@ -62,19 +62,18 @@ dummy_reloc_loop(void)
 	int i;
 
 	for (i = 0; i < 0x800; i++) {
-		BEGIN_BATCH(8);
-		OUT_BATCH(XY_SRC_COPY_BLT_CMD |
-			  XY_SRC_COPY_BLT_WRITE_ALPHA |
-			  XY_SRC_COPY_BLT_WRITE_RGB);
+		BLIT_COPY_BATCH_START(batch->devid, 0);
 		OUT_BATCH((3 << 24) | /* 32 bits */
 			  (0xcc << 16) | /* copy ROP */
 			  4*4096);
 		OUT_BATCH(2048 << 16 | 0);
 		OUT_BATCH((4096) << 16 | (2048));
 		OUT_RELOC_FENCED(blt_bo, I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
+		BLIT_RELOC_UDW(batch->devid);
 		OUT_BATCH(0 << 16 | 0);
 		OUT_BATCH(4*4096);
 		OUT_RELOC_FENCED(blt_bo, I915_GEM_DOMAIN_RENDER, 0, 0);
+		BLIT_RELOC_UDW(batch->devid);
 		ADVANCE_BATCH();
 		intel_batchbuffer_flush(batch);
 
@@ -93,47 +92,30 @@ dummy_reloc_loop(void)
 	}
 }
 
-int main(int argc, char **argv)
+igt_simple_main
 {
 	int fd;
 	int devid;
 
-	if (argc != 1) {
-		fprintf(stderr, "usage: %s\n", argv[0]);
-		exit(-1);
-	}
+	igt_skip_on_simulation();
 
 	fd = drm_open_any();
 	devid = intel_get_drm_devid(fd);
-	if (!HAS_BLT_RING(devid)) {
-		fprintf(stderr, "not (yet) implemented for pre-snb\n");
-		return 77;
-	}
+	igt_require_f(HAS_BLT_RING(devid),
+		      "not (yet) implemented for pre-snb\n");
 
 	bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
-	if (!bufmgr) {
-		fprintf(stderr, "failed to init libdrm\n");
-		exit(-1);
-	}
+	igt_assert(bufmgr);
 	drm_intel_bufmgr_gem_enable_reuse(bufmgr);
 
 	batch = intel_batchbuffer_alloc(bufmgr, devid);
-	if (!batch) {
-		fprintf(stderr, "failed to create batch buffer\n");
-		exit(-1);
-	}
+	igt_assert(batch);
 
 	target_buffer = drm_intel_bo_alloc(bufmgr, "target bo", 4096, 4096);
-	if (!target_buffer) {
-		fprintf(stderr, "failed to alloc target buffer\n");
-		exit(-1);
-	}
+	igt_assert(target_buffer);
 
 	blt_bo = drm_intel_bo_alloc(bufmgr, "target bo", 4*4096*4096, 4096);
-	if (!blt_bo) {
-		fprintf(stderr, "failed to alloc blt buffer\n");
-		exit(-1);
-	}
+	igt_assert(blt_bo);
 
 	dummy_reloc_loop();
 
@@ -142,6 +124,4 @@ int main(int argc, char **argv)
 	drm_intel_bufmgr_destroy(bufmgr);
 
 	close(fd);
-
-	return 0;
 }

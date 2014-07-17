@@ -49,7 +49,26 @@
  * In short: designed for maximum evilness.
  */
 
-#include "rendercopy.h"
+#include <stdlib.h>
+#include <sys/ioctl.h>
+#include <stdio.h>
+#include <string.h>
+#include <fcntl.h>
+#include <inttypes.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <getopt.h>
+
+#include <drm.h>
+
+#include "ioctl_wrappers.h"
+#include "drmtest.h"
+#include "intel_bufmgr.h"
+#include "intel_batchbuffer.h"
+#include "intel_io.h"
+#include "intel_chipset.h"
+#include "igt_aux.h"
 
 #define CMD_POLY_STIPPLE_OFFSET       0x7906
 
@@ -100,7 +119,7 @@ struct option_struct options;
 #define BUSY_BUF_SIZE		(256*4096)
 #define TILE_BYTES(size)	((size)*(size)*sizeof(uint32_t))
 
-static struct scratch_buf buffers[2][MAX_BUFS];
+static struct igt_buf buffers[2][MAX_BUFS];
 /* tile i is at logical position tile_permutation[i] */
 static unsigned *tile_permutation;
 static unsigned num_buffers = 0;
@@ -116,9 +135,9 @@ struct {
 	unsigned max_failed_reads;
 } stats;
 
-static void tile2xy(struct scratch_buf *buf, unsigned tile, unsigned *x, unsigned *y)
+static void tile2xy(struct igt_buf *buf, unsigned tile, unsigned *x, unsigned *y)
 {
-	assert(tile < buf->num_tiles);
+	igt_assert(tile < buf->num_tiles);
 	*x = (tile*options.tile_size) % (buf->stride/sizeof(uint32_t));
 	*y = ((tile*options.tile_size) / (buf->stride/sizeof(uint32_t))) * options.tile_size;
 }
@@ -141,20 +160,18 @@ static void emit_blt(drm_intel_bo *src_bo, uint32_t src_tiling, unsigned src_pit
 	}
 
 	/* copy lower half to upper half */
-	BEGIN_BATCH(8);
-	OUT_BATCH(XY_SRC_COPY_BLT_CMD |
-		  XY_SRC_COPY_BLT_WRITE_ALPHA |
-		  XY_SRC_COPY_BLT_WRITE_RGB |
-		  cmd_bits);
+	BLIT_COPY_BATCH_START(devid, cmd_bits);
 	OUT_BATCH((3 << 24) | /* 32 bits */
 		  (0xcc << 16) | /* copy ROP */
 		  dst_pitch);
 	OUT_BATCH(dst_y << 16 | dst_x);
 	OUT_BATCH((dst_y+h) << 16 | (dst_x+w));
 	OUT_RELOC_FENCED(dst_bo, I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
+	BLIT_RELOC_UDW(devid);
 	OUT_BATCH(src_y << 16 | src_x);
 	OUT_BATCH(src_pitch);
 	OUT_RELOC_FENCED(src_bo, I915_GEM_DOMAIN_RENDER, 0, 0);
+	BLIT_RELOC_UDW(devid);
 	ADVANCE_BATCH();
 
 	if (IS_GEN6(devid) || IS_GEN7(devid)) {
@@ -173,21 +190,21 @@ static void keep_gpu_busy(void)
 	int tmp;
 
 	tmp = 1 << gpu_busy_load;
-	assert(tmp <= 1024);
+	igt_assert(tmp <= 1024);
 
 	emit_blt(busy_bo, 0, 4096, 0, 0, tmp, 128,
 		 busy_bo, 0, 4096, 0, 128);
 }
 
-static void set_to_cpu_domain(struct scratch_buf *buf, int writing)
+static void set_to_cpu_domain(struct igt_buf *buf, int writing)
 {
 	gem_set_domain(drm_fd, buf->bo->handle, I915_GEM_DOMAIN_CPU,
 		       writing ? I915_GEM_DOMAIN_CPU : 0);
 }
 
 static unsigned int copyfunc_seq = 0;
-static void (*copyfunc)(struct scratch_buf *src, unsigned src_x, unsigned src_y,
-			struct scratch_buf *dst, unsigned dst_x, unsigned dst_y,
+static void (*copyfunc)(struct igt_buf *src, unsigned src_x, unsigned src_y,
+			struct igt_buf *dst, unsigned dst_x, unsigned dst_y,
 			unsigned logical_tile_no);
 
 /* stride, x, y in units of uint32_t! */
@@ -209,7 +226,7 @@ static void cpucpy2d(uint32_t *src, unsigned src_stride, unsigned src_x, unsigne
 			    printf("mismatch at tile %i pos %i, read %i, expected %i, diff %i\n",
 				    logical_tile_no, i*options.tile_size + j, tmp, expect, (int) tmp - expect);
 			    if (options.trace_tile >= 0 && options.fail)
-				    exit(1);
+				    igt_fail(1);
 			    failed++;
 			}
 			/* when not aborting, correct any errors */
@@ -217,7 +234,7 @@ static void cpucpy2d(uint32_t *src, unsigned src_stride, unsigned src_x, unsigne
 		}
 	}
 	if (failed && options.fail)
-		exit(1);
+		igt_fail(1);
 
 	if (failed > stats.max_failed_reads)
 		stats.max_failed_reads = failed;
@@ -225,11 +242,11 @@ static void cpucpy2d(uint32_t *src, unsigned src_stride, unsigned src_x, unsigne
 		stats.num_failed++;
 }
 
-static void cpu_copyfunc(struct scratch_buf *src, unsigned src_x, unsigned src_y,
-			 struct scratch_buf *dst, unsigned dst_x, unsigned dst_y,
+static void cpu_copyfunc(struct igt_buf *src, unsigned src_x, unsigned src_y,
+			 struct igt_buf *dst, unsigned dst_x, unsigned dst_y,
 			 unsigned logical_tile_no)
 {
-	assert(batch->ptr == batch->buffer);
+	igt_assert(batch->ptr == batch->buffer);
 
 	if (options.ducttape)
 		drm_intel_bo_wait_rendering(dst->bo);
@@ -244,14 +261,14 @@ static void cpu_copyfunc(struct scratch_buf *src, unsigned src_x, unsigned src_y
 		 logical_tile_no);
 }
 
-static void prw_copyfunc(struct scratch_buf *src, unsigned src_x, unsigned src_y,
-			 struct scratch_buf *dst, unsigned dst_x, unsigned dst_y,
+static void prw_copyfunc(struct igt_buf *src, unsigned src_x, unsigned src_y,
+			 struct igt_buf *dst, unsigned dst_x, unsigned dst_y,
 			 unsigned logical_tile_no)
 {
 	uint32_t tmp_tile[options.tile_size*options.tile_size];
 	int i;
 
-	assert(batch->ptr == batch->buffer);
+	igt_assert(batch->ptr == batch->buffer);
 
 	if (options.ducttape)
 		drm_intel_bo_wait_rendering(dst->bo);
@@ -288,8 +305,8 @@ static void prw_copyfunc(struct scratch_buf *src, unsigned src_x, unsigned src_y
 	}
 }
 
-static void blitter_copyfunc(struct scratch_buf *src, unsigned src_x, unsigned src_y,
-			     struct scratch_buf *dst, unsigned dst_x, unsigned dst_y,
+static void blitter_copyfunc(struct igt_buf *src, unsigned src_x, unsigned src_y,
+			     struct igt_buf *dst, unsigned dst_x, unsigned dst_y,
 			     unsigned logical_tile_no)
 {
 	static unsigned keep_gpu_busy_counter = 0;
@@ -318,37 +335,27 @@ static void blitter_copyfunc(struct scratch_buf *src, unsigned src_x, unsigned s
 	}
 }
 
-static void render_copyfunc(struct scratch_buf *src, unsigned src_x, unsigned src_y,
-			    struct scratch_buf *dst, unsigned dst_x, unsigned dst_y,
+static void render_copyfunc(struct igt_buf *src, unsigned src_x, unsigned src_y,
+			    struct igt_buf *dst, unsigned dst_x, unsigned dst_y,
 			    unsigned logical_tile_no)
 {
 	static unsigned keep_gpu_busy_counter = 0;
+	igt_render_copyfunc_t rendercopy = igt_get_render_copyfunc(devid);
 
 	/* check both edges of the fence usage */
 	if (keep_gpu_busy_counter & 1)
 		keep_gpu_busy();
 
-	if (IS_GEN2(devid))
-		gen2_render_copyfunc(batch,
-				     src, src_x, src_y,
-				     options.tile_size, options.tile_size,
-				     dst, dst_x, dst_y);
-	else if (IS_GEN3(devid))
-		gen3_render_copyfunc(batch,
-				     src, src_x, src_y,
-				     options.tile_size, options.tile_size,
-				     dst, dst_x, dst_y);
-	else if (IS_GEN6(devid))
-		gen6_render_copyfunc(batch,
-				     src, src_x, src_y,
-				     options.tile_size, options.tile_size,
-				     dst, dst_x, dst_y);
-	else if (IS_GEN7(devid))
-		gen7_render_copyfunc(batch,
-				     src, src_x, src_y,
-				     options.tile_size, options.tile_size,
-				     dst, dst_x, dst_y);
-	else
+	if (rendercopy) {
+		/*
+		 * Flush outstanding blts so that they don't end up on
+		 * the render ring when that's not allowed (gen6+).
+		 */
+		intel_batchbuffer_flush(batch);
+		rendercopy(batch, NULL, src, src_x, src_y,
+		     options.tile_size, options.tile_size,
+		     dst, dst_x, dst_y);
+	} else
 		blitter_copyfunc(src, src_x, src_y,
 				 dst, dst_x, dst_y,
 				 logical_tile_no);
@@ -453,32 +460,32 @@ static void fan_in_and_check(void)
 	}
 }
 
-static void sanitize_stride(struct scratch_buf *buf)
+static void sanitize_stride(struct igt_buf *buf)
 {
 
-	if (buf_height(buf) > options.max_dimension)
+	if (igt_buf_height(buf) > options.max_dimension)
 		buf->stride = buf->size / options.max_dimension;
 
-	if (buf_height(buf) < options.tile_size)
+	if (igt_buf_height(buf) < options.tile_size)
 		buf->stride = buf->size / options.tile_size;
 
-	if (buf_width(buf) < options.tile_size)
+	if (igt_buf_width(buf) < options.tile_size)
 		buf->stride = options.tile_size * sizeof(uint32_t);
 
-	assert(buf->stride <= 8192);
-	assert(buf_width(buf) <= options.max_dimension);
-	assert(buf_height(buf) <= options.max_dimension);
+	igt_assert(buf->stride <= 8192);
+	igt_assert(igt_buf_width(buf) <= options.max_dimension);
+	igt_assert(igt_buf_height(buf) <= options.max_dimension);
 
-	assert(buf_width(buf) >= options.tile_size);
-	assert(buf_height(buf) >= options.tile_size);
+	igt_assert(igt_buf_width(buf) >= options.tile_size);
+	igt_assert(igt_buf_height(buf) >= options.tile_size);
 
 }
 
-static void init_buffer(struct scratch_buf *buf, unsigned size)
+static void init_buffer(struct igt_buf *buf, unsigned size)
 {
 	buf->bo = drm_intel_bo_alloc(bufmgr, "tiled bo", size, 4096);
 	buf->size = size;
-	assert(buf->bo);
+	igt_assert(buf->bo);
 	buf->tiling = I915_TILING_NONE;
 	buf->stride = 4096;
 
@@ -499,12 +506,12 @@ static void init_buffer(struct scratch_buf *buf, unsigned size)
 
 static void exchange_buf(void *array, unsigned i, unsigned j)
 {
-	struct scratch_buf *buf_arr, tmp;
+	struct igt_buf *buf_arr, tmp;
 	buf_arr = array;
 
-	memcpy(&tmp, &buf_arr[i], sizeof(struct scratch_buf));
-	memcpy(&buf_arr[i], &buf_arr[j], sizeof(struct scratch_buf));
-	memcpy(&buf_arr[j], &tmp, sizeof(struct scratch_buf));
+	memcpy(&tmp, &buf_arr[i], sizeof(struct igt_buf));
+	memcpy(&buf_arr[i], &buf_arr[j], sizeof(struct igt_buf));
+	memcpy(&buf_arr[j], &tmp, sizeof(struct igt_buf));
 }
 
 
@@ -513,7 +520,7 @@ static void init_set(unsigned set)
 	long int r;
 	int i;
 
-	drmtest_permute_array(buffers[set], num_buffers, exchange_buf);
+	igt_permute_array(buffers[set], num_buffers, exchange_buf);
 
 	if (current_set == 1 && options.gpu_busy_load == 0) {
 		gpu_busy_load++;
@@ -576,7 +583,7 @@ static void copy_tiles(unsigned *permutation)
 {
 	unsigned src_tile, src_buf_idx, src_x, src_y;
 	unsigned dst_tile, dst_buf_idx, dst_x, dst_y;
-	struct scratch_buf *src_buf, *dst_buf;
+	struct igt_buf *src_buf, *dst_buf;
 	int i, idx;
 	for (i = 0; i < num_total_tiles; i++) {
 		/* tile_permutation is independent of current_permutation, so
@@ -618,22 +625,6 @@ static void copy_tiles(unsigned *permutation)
 	intel_batchbuffer_flush(batch);
 }
 
-static int get_num_fences(void)
-{
-	drm_i915_getparam_t gp;
-	int ret, val;
-
-	gp.param = I915_PARAM_NUM_FENCES_AVAIL;
-	gp.value = &val;
-	ret = drmIoctl(drm_fd, DRM_IOCTL_I915_GETPARAM, &gp);
-	assert (ret == 0);
-
-	printf ("total %d fences\n", val);
-	assert(val > 4);
-
-	return val - 2;
-}
-
 static void sanitize_tiles_per_buf(void)
 {
 	if (options.tiles_per_buf > options.scratch_buf_size / TILE_BYTES(options.tile_size))
@@ -665,6 +656,7 @@ static void parse_options(int argc, char **argv)
 		{"tile-size", 1, 0, TILESZ},
 #define CHCK_RENDER 0xdead0003
 		{"check-render-cpyfn", 0, 0, CHCK_RENDER},
+		{NULL, 0, 0, 0},
 	};
 
 	options.scratch_buf_size = 256*4096;
@@ -813,7 +805,8 @@ static void init(void)
 	bufmgr = drm_intel_bufmgr_gem_init(drm_fd, 4096);
 	drm_intel_bufmgr_gem_enable_reuse(bufmgr);
 	drm_intel_bufmgr_gem_enable_fenced_relocs(bufmgr);
-	num_fences = get_num_fences();
+	num_fences = gem_available_fences(drm_fd);
+	igt_assert(num_fences > 4);
 	batch = intel_batchbuffer_alloc(bufmgr, devid);
 
 	busy_bo = drm_intel_bo_alloc(bufmgr, "tiled bo", BUSY_BUF_SIZE, 4096);
@@ -834,7 +827,7 @@ static void init(void)
 
 static void check_render_copyfunc(void)
 {
-	struct scratch_buf src, dst;
+	struct igt_buf src, dst;
 	uint32_t *ptr;
 	int i, j, pass;
 
@@ -845,10 +838,10 @@ static void check_render_copyfunc(void)
 	init_buffer(&dst, options.scratch_buf_size);
 
 	for (pass = 0; pass < 16; pass++) {
-		int sx = random() % (buf_width(&src)-options.tile_size);
-		int sy = random() % (buf_height(&src)-options.tile_size);
-		int dx = random() % (buf_width(&dst)-options.tile_size);
-		int dy = random() % (buf_height(&dst)-options.tile_size);
+		int sx = random() % (igt_buf_width(&src)-options.tile_size);
+		int sy = random() % (igt_buf_height(&src)-options.tile_size);
+		int dx = random() % (igt_buf_width(&dst)-options.tile_size);
+		int dy = random() % (igt_buf_height(&dst)-options.tile_size);
 
 		if (options.use_cpu_maps)
 			set_to_cpu_domain(&src, 1);
@@ -889,7 +882,7 @@ int main(int argc, char **argv)
 
 	/* start our little helper early before too may allocations occur */
 	if (options.use_signal_helper)
-		drmtest_fork_signal_helper();
+		igt_fork_signal_helper();
 
 	init();
 
@@ -898,9 +891,9 @@ int main(int argc, char **argv)
 	tile_permutation = malloc(num_total_tiles*sizeof(uint32_t));
 	current_permutation = malloc(num_total_tiles*sizeof(uint32_t));
 	tmp_permutation = malloc(num_total_tiles*sizeof(uint32_t));
-	assert(tile_permutation);
-	assert(current_permutation);
-	assert(tmp_permutation);
+	igt_assert(tile_permutation);
+	igt_assert(current_permutation);
+	igt_assert(tmp_permutation);
 
 	fan_out();
 
@@ -916,7 +909,7 @@ int main(int argc, char **argv)
 
 		for (j = 0; j < num_total_tiles; j++)
 			current_permutation[j] = j;
-		drmtest_permute_array(current_permutation, num_total_tiles, exchange_uint);
+		igt_permute_array(current_permutation, num_total_tiles, exchange_uint);
 
 		copy_tiles(current_permutation);
 
@@ -939,7 +932,7 @@ int main(int argc, char **argv)
 
 	close(drm_fd);
 
-	drmtest_stop_signal_helper();
+	igt_stop_signal_helper();
 
 	return 0;
 }

@@ -29,18 +29,14 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
-
-#define MI_BATCH_BUFFER_END	(0xA<<23)
 
 /*
  * Testcase: Minmal bo_create and batchbuffer exec
@@ -57,26 +53,29 @@ static uint32_t do_gem_create(int fd, int size, int *retval)
 	create.handle = 0;
 	create.size = (size + 4095) & -4096;
 	ret = drmIoctl(fd, DRM_IOCTL_I915_GEM_CREATE, &create);
-	assert(retval || ret == 0);
+	igt_assert(retval || ret == 0);
 	if (retval)
 		*retval = errno;
 
 	return create.handle;
 }
 
+#if 0
 static int gem_exec(int fd, struct drm_i915_gem_execbuffer2 *execbuf)
 {
 	return drmIoctl(fd, DRM_IOCTL_I915_GEM_EXECBUFFER2, execbuf);
 }
+#endif
 
 static void create0(int fd)
 {
 	int retval = 0;
-	printf("trying to create a zero-length gem object\n");
+	igt_info("trying to create a zero-length gem object\n");
 	do_gem_create(fd, 0, &retval);
-	assert(retval == EINVAL);
+	igt_assert(retval == EINVAL);
 }
 
+#if 0
 static void exec0(int fd)
 {
 	struct drm_i915_gem_execbuffer2 execbuf;
@@ -110,15 +109,18 @@ static void exec0(int fd)
 	i915_execbuffer2_set_context_id(execbuf, 0);
 	execbuf.rsvd2 = 0;
 
-	printf("trying to run an empty batchbuffer\n");
+	igt_info("trying to run an empty batchbuffer\n");
 	gem_exec(fd, &execbuf);
 
 	gem_close(fd, exec[0].handle);
 }
+#endif
 
-int main(int argc, char **argv)
+igt_simple_main
 {
 	int fd;
+
+	igt_skip_on_simulation();
 
 	fd = drm_open_any();
 
@@ -127,6 +129,4 @@ int main(int argc, char **argv)
 	//exec0(fd);
 
 	close(fd);
-
-	return 0;
 }

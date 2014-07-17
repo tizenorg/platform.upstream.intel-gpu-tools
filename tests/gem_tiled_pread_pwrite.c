@@ -47,18 +47,19 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
-#include <sys/mman.h>
-#include "drm.h"
-#include "i915_drm.h"
+
+#include <drm.h>
+
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "igt_aux.h"
 
 #define WIDTH 512
 #define HEIGHT 512
@@ -77,7 +78,7 @@ gem_get_tiling(int fd, uint32_t handle, uint32_t *tiling, uint32_t *swizzle)
 	get_tiling.handle = handle;
 
 	ret = drmIoctl(fd, DRM_IOCTL_I915_GEM_GET_TILING, &get_tiling);
-	assert(ret == 0);
+	igt_assert(ret == 0);
 
 	*tiling = get_tiling.tiling_mode;
 	*swizzle = get_tiling.swizzle_mode;
@@ -113,8 +114,7 @@ create_bo(int fd)
 	return handle;
 }
 
-int
-main(int argc, char **argv)
+igt_simple_main
 {
 	int fd;
 	uint32_t *data;
@@ -123,9 +123,8 @@ main(int argc, char **argv)
 	uint32_t handle, handle_target;
 	int count;
 	
-
 	fd = drm_open_any();
-	count = intel_get_total_ram_mb() * 9 / 10;
+	count = SLOW_QUICK(intel_get_total_ram_mb() * 9 / 10, 8) ;
 
 	for (i = 0; i < count/2; i++) {
 		current_tiling_mode = I915_TILING_X;
@@ -141,19 +140,17 @@ main(int argc, char **argv)
 		/* Check the target bo's contents. */
 		data = gem_mmap(fd, handle_target, sizeof(linear), PROT_READ | PROT_WRITE);
 		for (j = 0; j < WIDTH*HEIGHT; j++)
-			if (data[j] != j) {
-				fprintf(stderr, "mismatch at %i: %i\n",
-						j, data[j]);
-				exit(1);
-			}
+			igt_assert_f(data[j] == j,
+				     "mismatch at %i: %i\n",
+				     j, data[j]);
 		munmap(data, sizeof(linear));
 
 		/* Leak both bos so that we use all of system mem! */
+		gem_madvise(fd, handle_target, I915_MADV_DONTNEED);
+		gem_madvise(fd, handle, I915_MADV_DONTNEED);
 
-		drmtest_progress("gem_tiled_pread_pwrite: ", i, count/2);
+		igt_progress("gem_tiled_pread_pwrite: ", i, count/2);
 	}
 
 	close(fd);
-
-	return 0;
 }

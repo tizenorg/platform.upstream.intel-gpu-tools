@@ -36,18 +36,19 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include "drm.h"
-#include "i915_drm.h"
+
+#include <drm.h>
+
+#include "ioctl_wrappers.h"
+#include "intel_chipset.h"
 #include "drmtest.h"
-#include "intel_bufmgr.h"
-#include "intel_batchbuffer.h"
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
+#include "igt_aux.h"
 
 #define WIDTH 512
 #define HEIGHT 512
@@ -57,27 +58,36 @@ static uint32_t linear[WIDTH*HEIGHT];
 static void
 copy(int fd, uint32_t dst, uint32_t src)
 {
-	uint32_t batch[10];
+	uint32_t batch[12];
 	struct drm_i915_gem_relocation_entry reloc[2];
 	struct drm_i915_gem_exec_object2 obj[3];
 	struct drm_i915_gem_execbuffer2 exec;
 	uint32_t handle;
-	int ret;
+	int ret, i=0;
 
-	batch[0] = XY_SRC_COPY_BLT_CMD |
+	batch[i++] = XY_SRC_COPY_BLT_CMD |
 		  XY_SRC_COPY_BLT_WRITE_ALPHA |
 		  XY_SRC_COPY_BLT_WRITE_RGB;
-	batch[1] = (3 << 24) | /* 32 bits */
+	if (intel_gen(intel_get_drm_devid(fd)) >= 8)
+		batch[i - 1] |= 8;
+	else
+		batch[i - 1] |= 6;
+
+	batch[i++] = (3 << 24) | /* 32 bits */
 		  (0xcc << 16) | /* copy ROP */
 		  WIDTH*4;
-	batch[2] = 0; /* dst x1,y1 */
-	batch[3] = (HEIGHT << 16) | WIDTH; /* dst x2,y2 */
-	batch[4] = 0; /* dst reloc */
-	batch[5] = 0; /* src x1,y1 */
-	batch[6] = WIDTH*4;
-	batch[7] = 0; /* src reloc */
-	batch[8] = MI_BATCH_BUFFER_END;
-	batch[9] = MI_NOOP;
+	batch[i++] = 0; /* dst x1,y1 */
+	batch[i++] = (HEIGHT << 16) | WIDTH; /* dst x2,y2 */
+	batch[i++] = 0; /* dst reloc */
+	if (intel_gen(intel_get_drm_devid(fd)) >= 8)
+		batch[i++] = 0;
+	batch[i++] = 0; /* src x1,y1 */
+	batch[i++] = WIDTH*4;
+	batch[i++] = 0; /* src reloc */
+	if (intel_gen(intel_get_drm_devid(fd)) >= 8)
+		batch[i++] = 0;
+	batch[i++] = MI_BATCH_BUFFER_END;
+	batch[i++] = MI_NOOP;
 
 	handle = gem_create(fd, 4096);
 	gem_write(fd, handle, 0, batch, sizeof(batch));
@@ -92,6 +102,8 @@ copy(int fd, uint32_t dst, uint32_t src)
 	reloc[1].target_handle = src;
 	reloc[1].delta = 0;
 	reloc[1].offset = 7 * sizeof(batch[0]);
+	if (intel_gen(intel_get_drm_devid(fd)) >= 8)
+		reloc[1].offset += sizeof(batch[0]);
 	reloc[1].presumed_offset = 0;
 	reloc[1].read_domains = I915_GEM_DOMAIN_RENDER;;
 	reloc[1].write_domain = 0;
@@ -125,7 +137,7 @@ copy(int fd, uint32_t dst, uint32_t src)
 	exec.buffers_ptr = (uintptr_t)obj;
 	exec.buffer_count = 3;
 	exec.batch_start_offset = 0;
-	exec.batch_len = sizeof(batch);
+	exec.batch_len = i * 4;
 	exec.DR1 = exec.DR4 = 0;
 	exec.num_cliprects = 0;
 	exec.cliprects_ptr = 0;
@@ -138,7 +150,7 @@ copy(int fd, uint32_t dst, uint32_t src)
 		drmCommandNone(fd, DRM_I915_GEM_THROTTLE);
 		ret = drmIoctl(fd, DRM_IOCTL_I915_GEM_EXECBUFFER2, &exec);
 	}
-	assert(ret == 0);
+	igt_assert(ret == 0);
 
 	gem_close(fd, handle);
 }
@@ -166,36 +178,19 @@ check_bo(int fd, uint32_t handle, uint32_t val)
 
 	gem_read(fd, handle, 0, linear, sizeof(linear));
 	for (i = 0; i < WIDTH*HEIGHT; i++) {
-		if (linear[i] != val) {
-			fprintf(stderr, "Expected 0x%08x, found 0x%08x "
-				"at offset 0x%08x\n",
-				val, linear[i], i * 4);
-			abort();
-		}
+		igt_assert_f(linear[i] == val,
+			     "Expected 0x%08x, found 0x%08x "
+			     "at offset 0x%08x\n",
+			     val, linear[i], i * 4);
 		val++;
 	}
 }
 
-int main(int argc, char **argv)
+static void run_test(int fd, int count)
 {
 	uint32_t *handle, *start_val;
 	uint32_t start = 0;
-	int i, fd, count;
-
-	fd = drm_open_any();
-
-	count = 0;
-	if (argc > 1)
-		count = atoi(argv[1]);
-	if (count == 0)
-		count = 3 * gem_aperture_size(fd) / (1024*1024) / 2;
-
-	if (count > intel_get_total_ram_mb() * 9 / 10) {
-		count = intel_get_total_ram_mb() * 9 / 10;
-		printf("not enough RAM to run test, reducing buffer count\n");
-	}
-
-	printf("Using %d 1MiB buffers\n", count);
+	int i;
 
 	handle = malloc(sizeof(uint32_t)*count*2);
 	start_val = handle + count;
@@ -206,11 +201,11 @@ int main(int argc, char **argv)
 		start += 1024 * 1024 / 4;
 	}
 
-	printf("Verifying initialisation...\n");
+	igt_info("Verifying initialisation...\n");
 	for (i = 0; i < count; i++)
 		check_bo(fd, handle[i], start_val[i]);
 
-	printf("Cyclic blits, forward...\n");
+	igt_info("Cyclic blits, forward...\n");
 	for (i = 0; i < count * 4; i++) {
 		int src = i % count;
 		int dst = (i + 1) % count;
@@ -221,7 +216,7 @@ int main(int argc, char **argv)
 	for (i = 0; i < count; i++)
 		check_bo(fd, handle[i], start_val[i]);
 
-	printf("Cyclic blits, backward...\n");
+	igt_info("Cyclic blits, backward...\n");
 	for (i = 0; i < count * 4; i++) {
 		int src = (i + 1) % count;
 		int dst = i % count;
@@ -232,7 +227,7 @@ int main(int argc, char **argv)
 	for (i = 0; i < count; i++)
 		check_bo(fd, handle[i], start_val[i]);
 
-	printf("Random blits...\n");
+	igt_info("Random blits...\n");
 	for (i = 0; i < count * 4; i++) {
 		int src = random() % count;
 		int dst = random() % count;
@@ -243,8 +238,50 @@ int main(int argc, char **argv)
 		copy(fd, handle[dst], handle[src]);
 		start_val[dst] = start_val[src];
 	}
-	for (i = 0; i < count; i++)
+	for (i = 0; i < count; i++) {
 		check_bo(fd, handle[i], start_val[i]);
+		gem_close(fd, handle[i]);
+	}
 
-	return 0;
+	free(handle);
+}
+
+int main(int argc, char **argv)
+{
+	int fd = 0, count = 0;
+
+	igt_skip_on_simulation();
+
+	igt_subtest_init(argc, argv);
+
+	igt_fixture {
+		fd = drm_open_any();
+
+		if (argc > 1)
+			count = atoi(argv[1]);
+		if (count == 0)
+			count = 3 * gem_aperture_size(fd) / (1024*1024) / 2;
+		else if (count < 2) {
+			fprintf(stderr, "count must be >= 2\n");
+			return 1;
+		}
+
+		if (count > intel_get_total_ram_mb() * 9 / 10) {
+			count = intel_get_total_ram_mb() * 9 / 10;
+			igt_info("not enough RAM to run test, reducing buffer count\n");
+		}
+
+		igt_info("Using %d 1MiB buffers\n", count);
+	}
+
+	igt_subtest("normal")
+		run_test(fd, count);
+
+	igt_subtest("interruptible") {
+		igt_fork_signal_helper();
+		run_test(fd, count);
+		igt_stop_signal_helper();
+	}
+
+	igt_exit();
 }

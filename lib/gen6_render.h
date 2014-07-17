@@ -1,6 +1,8 @@
 #ifndef GEN6_RENDER_H
 #define GEN6_RENDER_H
 
+#include <stdint.h>
+
 #define GEN6_3D(Pipeline,Opcode,Subopcode) ((3 << 29) | \
 					   ((Pipeline) << 27) | \
 					   ((Opcode) << 24) | \
@@ -150,6 +152,7 @@
 #define VB0_VERTEXDATA			(0 << 20)
 #define VB0_INSTANCEDATA		(1 << 20)
 #define VB0_BUFFER_PITCH_SHIFT		0
+#define VB0_NULL_VERTEX_BUFFER          (1 << 13)
 
 /* VERTEX_ELEMENT_STATE Structure */
 #define VE0_VERTEX_BUFFER_INDEX_SHIFT	26 /* for GEN6 */
@@ -259,10 +262,6 @@
 #define GEN6_TS_STRG_VAL		       0x7e04
 #define GEN6_TS_RDATA		       0x7e08
 
-/* TD_CTL on gen6 is 0x7000, to not break stuff which depends on this... */
-#ifndef GEN6_TD_CTL
-#define GEN6_TD_CTL		       0x8000
-#endif
 #define GEN6_TD_CTL_MUX_SHIFT	       8
 #define GEN6_TD_CTL_EXTERNAL_HALT_R0_DEBUG_MATCH	   (1 << 7)
 #define GEN6_TD_CTL_FORCE_EXTERNAL_HALT		   (1 << 6)
@@ -568,10 +567,6 @@
 #define GEN6_TS_STRG_VAL		       0x7e04
 #define GEN6_TS_RDATA		       0x7e08
 
-/* TD_CTL on gen6 is 0x7000, to not break stuff which depends on this... */
-#ifndef GEN6_TD_CTL
-#define GEN6_TD_CTL                   0x8000
-#endif
 #define GEN6_TD_CTL_MUX_SHIFT	       8
 #define GEN6_TD_CTL_EXTERNAL_HALT_R0_DEBUG_MATCH	   (1 << 7)
 #define GEN6_TD_CTL_FORCE_EXTERNAL_HALT		   (1 << 6)

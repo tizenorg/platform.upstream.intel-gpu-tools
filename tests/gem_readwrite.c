@@ -29,14 +29,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 
 #define OBJECT_SIZE 16384
@@ -44,91 +43,105 @@
 static int
 do_read(int fd, int handle, void *buf, int offset, int size)
 {
-	struct drm_i915_gem_pread read;
+	struct drm_i915_gem_pread gem_pread;
 
 	/* Ensure that we don't have any convenient data in buf in case
 	 * we fail.
 	 */
 	memset(buf, 0xd0, size);
 
-	memset(&read, 0, sizeof(read));
-	read.handle = handle;
-	read.data_ptr = (uintptr_t)buf;
-	read.size = size;
-	read.offset = offset;
+	memset(&gem_pread, 0, sizeof(gem_pread));
+	gem_pread.handle = handle;
+	gem_pread.data_ptr = (uintptr_t)buf;
+	gem_pread.size = size;
+	gem_pread.offset = offset;
 
-	return ioctl(fd, DRM_IOCTL_I915_GEM_PREAD, &read);
+	return ioctl(fd, DRM_IOCTL_I915_GEM_PREAD, &gem_pread);
 }
 
 static int
 do_write(int fd, int handle, void *buf, int offset, int size)
 {
-	struct drm_i915_gem_pwrite write;
+	struct drm_i915_gem_pwrite gem_pwrite;
 
-	memset(&write, 0, sizeof(write));
-	write.handle = handle;
-	write.data_ptr = (uintptr_t)buf;
-	write.size = size;
-	write.offset = offset;
+	memset(&gem_pwrite, 0, sizeof(gem_pwrite));
+	gem_pwrite.handle = handle;
+	gem_pwrite.data_ptr = (uintptr_t)buf;
+	gem_pwrite.size = size;
+	gem_pwrite.offset = offset;
 
-	return ioctl(fd, DRM_IOCTL_I915_GEM_PWRITE, &write);
+	return ioctl(fd, DRM_IOCTL_I915_GEM_PWRITE, &gem_pwrite);
 }
 
-int main(int argc, char **argv)
+int fd;
+uint32_t handle;
+
+igt_main
 {
-	int fd;
 	uint8_t expected[OBJECT_SIZE];
 	uint8_t buf[OBJECT_SIZE];
 	int ret;
-	int handle;
 
-	fd = drm_open_any();
+	igt_skip_on_simulation();
 
-	handle = gem_create(fd, OBJECT_SIZE);
+	igt_fixture {
+		fd = drm_open_any();
 
-	printf("Testing contents of newly created object.\n");
-	ret = do_read(fd, handle, buf, 0, OBJECT_SIZE);
-	assert(ret == 0);
-	memset(&expected, 0, sizeof(expected));
-	assert(memcmp(expected, buf, sizeof(expected)) == 0);
+		handle = gem_create(fd, OBJECT_SIZE);
+	}
 
-	printf("Testing read beyond end of buffer.\n");
-	ret = do_read(fd, handle, buf, OBJECT_SIZE / 2, OBJECT_SIZE);
-	assert(ret == -1 && errno == EINVAL);
+	igt_subtest("new-obj") {
+		igt_info("Testing contents of newly created object.\n");
+		ret = do_read(fd, handle, buf, 0, OBJECT_SIZE);
+		igt_assert(ret == 0);
+		memset(&expected, 0, sizeof(expected));
+		igt_assert(memcmp(expected, buf, sizeof(expected)) == 0);
+	}
 
-	printf("Testing full write of buffer\n");
-	memset(buf, 0, sizeof(buf));
-	memset(buf + 1024, 0x01, 1024);
-	memset(expected + 1024, 0x01, 1024);
-	ret = do_write(fd, handle, buf, 0, OBJECT_SIZE);
-	assert(ret == 0);
-	ret = do_read(fd, handle, buf, 0, OBJECT_SIZE);
-	assert(ret == 0);
-	assert(memcmp(buf, expected, sizeof(buf)) == 0);
+	igt_subtest("beyond-EOB") {
+		igt_info("Testing read beyond end of buffer.\n");
+		ret = do_read(fd, handle, buf, OBJECT_SIZE / 2, OBJECT_SIZE);
+		igt_assert(ret == -1 && errno == EINVAL);
+	}
 
-	printf("Testing partial write of buffer\n");
-	memset(buf + 4096, 0x02, 1024);
-	memset(expected + 4096, 0x02, 1024);
-	ret = do_write(fd, handle, buf + 4096, 4096, 1024);
-	assert(ret == 0);
-	ret = do_read(fd, handle, buf, 0, OBJECT_SIZE);
-	assert(ret == 0);
-	assert(memcmp(buf, expected, sizeof(buf)) == 0);
+	igt_subtest("read-write") {
+		igt_info("Testing full write of buffer\n");
+		memset(buf, 0, sizeof(buf));
+		memset(buf + 1024, 0x01, 1024);
+		memset(expected + 1024, 0x01, 1024);
+		ret = do_write(fd, handle, buf, 0, OBJECT_SIZE);
+		igt_assert(ret == 0);
+		ret = do_read(fd, handle, buf, 0, OBJECT_SIZE);
+		igt_assert(ret == 0);
+		igt_assert(memcmp(buf, expected, sizeof(buf)) == 0);
 
-	printf("Testing partial read of buffer\n");
-	ret = do_read(fd, handle, buf, 512, 1024);
-	assert(ret == 0);
-	assert(memcmp(buf, expected + 512, 1024) == 0);
+		igt_info("Testing partial write of buffer\n");
+		memset(buf + 4096, 0x02, 1024);
+		memset(expected + 4096, 0x02, 1024);
+		ret = do_write(fd, handle, buf + 4096, 4096, 1024);
+		igt_assert(ret == 0);
+		ret = do_read(fd, handle, buf, 0, OBJECT_SIZE);
+		igt_assert(ret == 0);
+		igt_assert(memcmp(buf, expected, sizeof(buf)) == 0);
 
-	printf("Testing read of bad buffer handle\n");
-	ret = do_read(fd, 1234, buf, 0, 1024);
-	assert(ret == -1 && errno == ENOENT);
+		igt_info("Testing partial read of buffer\n");
+		ret = do_read(fd, handle, buf, 512, 1024);
+		igt_assert(ret == 0);
+		igt_assert(memcmp(buf, expected + 512, 1024) == 0);
+	}
 
-	printf("Testing write of bad buffer handle\n");
-	ret = do_write(fd, 1234, buf, 0, 1024);
-	assert(ret == -1 && errno == ENOENT);
+	igt_subtest("read-bad-handle") {
+		igt_info("Testing read of bad buffer handle\n");
+		ret = do_read(fd, 1234, buf, 0, 1024);
+		igt_assert(ret == -1 && errno == ENOENT);
+	}
 
-	close(fd);
+	igt_subtest("write-bad-handle") {
+		igt_info("Testing write of bad buffer handle\n");
+		ret = do_write(fd, 1234, buf, 0, 1024);
+		igt_assert(ret == -1 && errno == ENOENT);
+	}
 
-	return 0;
+	igt_fixture
+		close(fd);
 }

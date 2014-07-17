@@ -29,14 +29,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include "drm.h"
-#include "i915_drm.h"
+#include "ioctl_wrappers.h"
 #include "drmtest.h"
 
 static void
@@ -45,12 +44,12 @@ test_bad_close(int fd)
 	struct drm_gem_close close_bo;
 	int ret;
 
-	printf("Testing error return on bad close ioctl.\n");
+	igt_info("Testing error return on bad close ioctl.\n");
 
 	close_bo.handle = 0x10101010;
 	ret = ioctl(fd, DRM_IOCTL_GEM_CLOSE, &close_bo);
 
-	assert(ret == -1 && errno == EINVAL);
+	igt_assert(ret == -1 && errno == EINVAL);
 }
 
 static void
@@ -58,7 +57,7 @@ test_create_close(int fd)
 {
 	uint32_t handle;
 
-	printf("Testing creating and closing an object.\n");
+	igt_info("Testing creating and closing an object.\n");
 
 	handle = gem_create(fd, 16*1024);
 
@@ -68,7 +67,7 @@ test_create_close(int fd)
 static void
 test_create_fd_close(int fd)
 {
-	printf("Testing closing with an object allocated.\n");
+	igt_info("Testing closing with an object allocated.\n");
 
 	gem_create(fd, 16*1024);
 	/* leak it */
@@ -76,15 +75,17 @@ test_create_fd_close(int fd)
 	close(fd);
 }
 
-int main(int argc, char **argv)
+int fd;
+
+igt_main
 {
-	int fd;
+	igt_fixture
+		fd = drm_open_any();
 
-	fd = drm_open_any();
-
-	test_bad_close(fd);
-	test_create_close(fd);
-	test_create_fd_close(fd);
-
-	return 0;
+	igt_subtest("bad-close")
+		test_bad_close(fd);
+	igt_subtest("create-close")
+		test_create_close(fd);
+	igt_subtest("create-fd-close")
+		test_create_fd_close(fd);
 }

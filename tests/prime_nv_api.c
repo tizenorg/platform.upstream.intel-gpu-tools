@@ -16,8 +16,10 @@
 
 #include "intel_bufmgr.h"
 #include "nouveau.h"
-#include "intel_gpu_tools.h"
+#include "intel_io.h"
 #include "intel_batchbuffer.h"
+#include "drmtest.h"
+#include "intel_chipset.h"
 
 #define BO_SIZE (256*1024)
 
@@ -29,7 +31,7 @@ struct nouveau_client *nclient, *nclient2;
 uint32_t devid;
 struct intel_batchbuffer *intel_batch;
 
-static int find_and_open_devices(void)
+static void find_and_open_devices(void)
 {
 	int i;
 	char path[80];
@@ -38,6 +40,8 @@ static int find_and_open_devices(void)
 	char vendor_id[8];
 	int venid;
 	for (i = 0; i < 9; i++) {
+		char *ret;
+
 		sprintf(path, "/sys/class/drm/card%d/device/vendor", i);
 		if (stat(path, &buf))
 			break;
@@ -46,166 +50,234 @@ static int find_and_open_devices(void)
 		if (!fl)
 			break;
 
-		fgets(vendor_id, 8, fl);
+		ret = fgets(vendor_id, 8, fl);
+		igt_assert(ret);
 		fclose(fl);
 
 		venid = strtoul(vendor_id, NULL, 16);
 		sprintf(path, "/dev/dri/card%d", i);
 		if (venid == 0x8086) {
 			intel_fd = open(path, O_RDWR);
-			if (!intel_fd)
-				return -1;
+			igt_assert(intel_fd);
 			intel_fd2 = open(path, O_RDWR);
-			if (!intel_fd2)
-				return -1;
+			igt_assert(intel_fd2);
 		} else if (venid == 0x10de) {
 			nouveau_fd = open(path, O_RDWR);
-			if (!nouveau_fd)
-				return -1;
+			igt_assert(nouveau_fd);
 			nouveau_fd2 = open(path, O_RDWR);
-			if (!nouveau_fd2)
-				return -1;
+			igt_assert(nouveau_fd2);
 		}
 	}
-	return 0;
 }
 
-static int test1(void)
+static void test_i915_nv_import_twice(void)
 {
-	int ret;
 	drm_intel_bo *test_intel_bo;
 	int prime_fd;
 	struct nouveau_bo *nvbo = NULL, *nvbo2 = NULL;
 
 	test_intel_bo = drm_intel_bo_alloc(bufmgr, "test bo", BO_SIZE, 4096);
 
-	ret = drm_intel_bo_gem_export_to_prime(test_intel_bo, &prime_fd);
-	if (ret)
-		goto out;
+	igt_assert(drm_intel_bo_gem_export_to_prime(test_intel_bo, &prime_fd) == 0);
 
-	ret = nouveau_bo_prime_handle_ref(ndev, prime_fd, &nvbo);
-	if (ret < 0) {
-		close(prime_fd);
-		goto out;
-	}
-	ret = nouveau_bo_prime_handle_ref(ndev2, prime_fd, &nvbo2);
+	igt_assert(nouveau_bo_prime_handle_ref(ndev, prime_fd, &nvbo) == 0);
+	igt_assert(nouveau_bo_prime_handle_ref(ndev2, prime_fd, &nvbo2) == 0);
 	close(prime_fd);
-	if (ret < 0)
-		goto out;
 
-	if (nvbo->handle != nvbo2->handle)
-		ret = -1;
-out:
 	nouveau_bo_ref(NULL, &nvbo2);
 	nouveau_bo_ref(NULL, &nvbo);
 	drm_intel_bo_unreference(test_intel_bo);
-	return ret;
 }
 
-
-static int test2(void)
+static void test_i915_nv_import_twice_check_flink_name(void)
 {
-	int ret;
+	drm_intel_bo *test_intel_bo;
+	int prime_fd;
+	struct nouveau_bo *nvbo = NULL, *nvbo2 = NULL;
+	uint32_t flink_name1, flink_name2;
+
+	test_intel_bo = drm_intel_bo_alloc(bufmgr, "test bo", BO_SIZE, 4096);
+
+	igt_assert(drm_intel_bo_gem_export_to_prime(test_intel_bo, &prime_fd) == 0);
+
+	igt_assert(nouveau_bo_prime_handle_ref(ndev, prime_fd, &nvbo) == 0);
+	igt_assert(nouveau_bo_prime_handle_ref(ndev2, prime_fd, &nvbo2) == 0);
+	close(prime_fd);
+
+	igt_assert(nouveau_bo_name_get(nvbo, &flink_name1) == 0);
+	igt_assert(nouveau_bo_name_get(nvbo2, &flink_name2) == 0);
+
+	igt_assert(flink_name1 == flink_name2);
+
+	nouveau_bo_ref(NULL, &nvbo2);
+	nouveau_bo_ref(NULL, &nvbo);
+	drm_intel_bo_unreference(test_intel_bo);
+}
+
+static void test_i915_nv_reimport_twice_check_flink_name(void)
+{
+	drm_intel_bo *test_intel_bo;
+	int prime_fd;
+	struct nouveau_bo *nvbo = NULL, *nvbo2 = NULL;
+	uint32_t flink_name1, flink_name2;
+
+	test_intel_bo = drm_intel_bo_alloc(bufmgr, "test bo", BO_SIZE, 4096);
+
+	igt_assert(drm_intel_bo_gem_export_to_prime(test_intel_bo, &prime_fd) == 0);
+
+	igt_assert(nouveau_bo_prime_handle_ref(ndev, prime_fd, &nvbo) == 0);
+
+	/* create a new dma-buf */
+	close(prime_fd);
+	igt_assert(drm_intel_bo_gem_export_to_prime(test_intel_bo, &prime_fd) == 0);
+
+	igt_assert(nouveau_bo_prime_handle_ref(ndev2, prime_fd, &nvbo2) == 0);
+	close(prime_fd);
+
+	igt_assert(nouveau_bo_name_get(nvbo, &flink_name1) == 0);
+	igt_assert(nouveau_bo_name_get(nvbo2, &flink_name2) == 0);
+
+	igt_assert(flink_name1 == flink_name2);
+
+	nouveau_bo_ref(NULL, &nvbo2);
+	nouveau_bo_ref(NULL, &nvbo);
+	drm_intel_bo_unreference(test_intel_bo);
+}
+
+static void test_nv_i915_import_twice_check_flink_name(void)
+{
+	drm_intel_bo *intel_bo = NULL, *intel_bo2 = NULL;
+	int prime_fd;
+	struct nouveau_bo *nvbo = NULL;
+	uint32_t flink_name1, flink_name2;
+
+	igt_assert(nouveau_bo_new(ndev, NOUVEAU_BO_GART | NOUVEAU_BO_MAP,
+				  0, BO_SIZE, NULL, &nvbo) == 0);
+
+	igt_assert(nouveau_bo_set_prime(nvbo, &prime_fd) == 0);
+
+	intel_bo = drm_intel_bo_gem_create_from_prime(bufmgr, prime_fd, BO_SIZE);
+	igt_assert(intel_bo);
+
+	intel_bo2 = drm_intel_bo_gem_create_from_prime(bufmgr2, prime_fd, BO_SIZE);
+	igt_assert(intel_bo2);
+	close(prime_fd);
+
+	igt_assert(drm_intel_bo_flink(intel_bo, &flink_name1) == 0);
+	igt_assert(drm_intel_bo_flink(intel_bo2, &flink_name2) == 0);
+
+	igt_assert(flink_name1 == flink_name2);
+
+	nouveau_bo_ref(NULL, &nvbo);
+	drm_intel_bo_unreference(intel_bo);
+	drm_intel_bo_unreference(intel_bo2);
+}
+
+static void test_nv_i915_reimport_twice_check_flink_name(void)
+{
+	drm_intel_bo *intel_bo = NULL, *intel_bo2 = NULL;
+	int prime_fd;
+	struct nouveau_bo *nvbo = NULL;
+	uint32_t flink_name1, flink_name2;
+
+	igt_assert(nouveau_bo_new(ndev, NOUVEAU_BO_GART | NOUVEAU_BO_MAP,
+				  0, BO_SIZE, NULL, &nvbo) == 0);
+
+	igt_assert(nouveau_bo_set_prime(nvbo, &prime_fd) == 0);
+
+	intel_bo = drm_intel_bo_gem_create_from_prime(bufmgr, prime_fd, BO_SIZE);
+	igt_assert(intel_bo);
+	close(prime_fd);
+	igt_assert(nouveau_bo_set_prime(nvbo, &prime_fd) == 0);
+
+	intel_bo2 = drm_intel_bo_gem_create_from_prime(bufmgr2, prime_fd, BO_SIZE);
+	igt_assert(intel_bo2);
+	close(prime_fd);
+
+	igt_assert(drm_intel_bo_flink(intel_bo, &flink_name1) == 0);
+	igt_assert(drm_intel_bo_flink(intel_bo2, &flink_name2) == 0);
+
+	igt_assert(flink_name1 == flink_name2);
+
+	nouveau_bo_ref(NULL, &nvbo);
+	drm_intel_bo_unreference(intel_bo);
+	drm_intel_bo_unreference(intel_bo2);
+}
+
+static void test_i915_nv_import_vs_close(void)
+{
 	drm_intel_bo *test_intel_bo;
 	int prime_fd;
 	struct nouveau_bo *nvbo = NULL, *nvbo2 = NULL;
 
 	test_intel_bo = drm_intel_bo_alloc(bufmgr, "test bo", BO_SIZE, 4096);
+	igt_assert(test_intel_bo);
 
-	ret = drm_intel_bo_gem_export_to_prime(test_intel_bo, &prime_fd);
-	if (ret < 0)
-		goto out;
+	igt_assert(drm_intel_bo_gem_export_to_prime(test_intel_bo, &prime_fd) == 0);
 
-	ret = nouveau_bo_prime_handle_ref(ndev, prime_fd, &nvbo);
+	igt_assert(nouveau_bo_prime_handle_ref(ndev, prime_fd, &nvbo) == 0);
 	close(prime_fd);
-	if (ret < 0)
-		goto out;
-	ret = nouveau_bo_prime_handle_ref(ndev2, prime_fd, &nvbo2);
-	if (ret == 0)
-		ret = -1;
-	else
-		ret = 0;
+	igt_assert(nouveau_bo_prime_handle_ref(ndev2, prime_fd, &nvbo2) < 0);
 
-out:
 	nouveau_bo_ref(NULL, &nvbo2);
 	nouveau_bo_ref(NULL, &nvbo);
 	drm_intel_bo_unreference(test_intel_bo);
-	return ret;
 }
-
 
 /* import handle twice on one driver */
-static int test3(void)
+static void test_i915_nv_double_import(void)
 {
-	int ret;
 	drm_intel_bo *test_intel_bo;
 	int prime_fd;
 	struct nouveau_bo *nvbo = NULL, *nvbo2 = NULL;
 
 	test_intel_bo = drm_intel_bo_alloc(bufmgr, "test bo", BO_SIZE, 4096);
+	igt_assert(test_intel_bo);
 
-	ret = drm_intel_bo_gem_export_to_prime(test_intel_bo, &prime_fd);
-	if (ret < 0)
-		goto out;
+	igt_assert(drm_intel_bo_gem_export_to_prime(test_intel_bo, &prime_fd) == 0);
 
-	ret = nouveau_bo_prime_handle_ref(ndev, prime_fd, &nvbo);
-	if (ret < 0) {
-		close(prime_fd);
-		goto out;
-	}
-	ret = nouveau_bo_prime_handle_ref(ndev, prime_fd, &nvbo2);
+	igt_assert(nouveau_bo_prime_handle_ref(ndev, prime_fd, &nvbo) == 0);
+	igt_assert(nouveau_bo_prime_handle_ref(ndev, prime_fd, &nvbo2) == 0);
 	close(prime_fd);
-	if (ret < 0)
-		goto out;
 
-	if (nvbo->handle != nvbo2->handle)
-		ret = -1;
+	igt_assert(nvbo->handle == nvbo2->handle);
 
-out:
 	nouveau_bo_ref(NULL, &nvbo2);
 	nouveau_bo_ref(NULL, &nvbo);
 	drm_intel_bo_unreference(test_intel_bo);
-	return ret;
 }
 
 /* export handle twice from one driver - import twice
    see if we get same object */
-static int test4(void)
+static void test_i915_nv_double_export(void)
 {
-	int ret;
 	drm_intel_bo *test_intel_bo;
 	int prime_fd, prime_fd2;
 	struct nouveau_bo *nvbo = NULL, *nvbo2 = NULL;
 
 	test_intel_bo = drm_intel_bo_alloc(bufmgr, "test bo", BO_SIZE, 4096);
+	igt_assert(test_intel_bo);
 
 	drm_intel_bo_gem_export_to_prime(test_intel_bo, &prime_fd);
 
 	drm_intel_bo_gem_export_to_prime(test_intel_bo, &prime_fd2);
 
-	ret = nouveau_bo_prime_handle_ref(ndev, prime_fd, &nvbo);
+	igt_assert(nouveau_bo_prime_handle_ref(ndev, prime_fd, &nvbo) == 0);
 	close(prime_fd);
-	if (ret >= 0)
-		ret = nouveau_bo_prime_handle_ref(ndev, prime_fd2, &nvbo2);
+	igt_assert(nouveau_bo_prime_handle_ref(ndev, prime_fd2, &nvbo2) == 0);
 	close(prime_fd2);
-	if (ret < 0)
-		goto out;
 
-	if (nvbo->handle != nvbo2->handle)
-		ret = -1;
+	igt_assert(nvbo->handle == nvbo2->handle);
 
-out:
 	nouveau_bo_ref(NULL, &nvbo2);
 	nouveau_bo_ref(NULL, &nvbo);
 	drm_intel_bo_unreference(test_intel_bo);
-	return ret;
 }
 
 /* export handle from intel driver - reimport to intel driver
    see if you get same object */
-static int test5(void)
+static void test_i915_self_import(void)
 {
-	int ret;
 	drm_intel_bo *test_intel_bo, *test_intel_bo2;
 	int prime_fd;
 
@@ -215,52 +287,35 @@ static int test5(void)
 
 	test_intel_bo2 = drm_intel_bo_gem_create_from_prime(bufmgr, prime_fd, BO_SIZE);
 	close(prime_fd);
-	if (!test_intel_bo2) {
-		ret = -1;
-		goto out;
-	}
+	igt_assert(test_intel_bo2);
 
-	ret = 0;
-	if (test_intel_bo->handle != test_intel_bo2->handle)
-		ret = -1;
+	igt_assert(test_intel_bo->handle == test_intel_bo2->handle);
 
-out:
 	drm_intel_bo_unreference(test_intel_bo);
-	return ret;
 }
 
 /* nouveau export reimport test */
-static int test6(void)
+static void test_nv_self_import(void)
 {
-	int ret;
 	int prime_fd;
 	struct nouveau_bo *nvbo, *nvbo2;
 
-	ret = nouveau_bo_new(ndev, NOUVEAU_BO_GART | NOUVEAU_BO_MAP,
-			     0, BO_SIZE, NULL, &nvbo);
-	if (ret < 0)
-		return ret;
-	ret = nouveau_bo_set_prime(nvbo, &prime_fd);
-	if (ret < 0)
-		return ret;
+	igt_assert(nouveau_bo_new(ndev, NOUVEAU_BO_GART | NOUVEAU_BO_MAP,
+				  0, BO_SIZE, NULL, &nvbo) == 0);
+	igt_assert(nouveau_bo_set_prime(nvbo, &prime_fd) == 0);
 
-	ret = nouveau_bo_prime_handle_ref(ndev, prime_fd, &nvbo2);
+	igt_assert(nouveau_bo_prime_handle_ref(ndev, prime_fd, &nvbo2) == 0);
 	close(prime_fd);
-	if (ret < 0)
-		return ret;
 
-	if (nvbo->handle != nvbo2->handle)
-		fprintf(stderr,"mismatch handles %d %d\n", nvbo->handle, nvbo2->handle);
+	igt_assert(nvbo->handle == nvbo2->handle);
 	nouveau_bo_ref(NULL, &nvbo);
 	nouveau_bo_ref(NULL, &nvbo2);
-	return 0;
 }
 
 /* export handle from intel driver - reimport to another intel driver bufmgr
    see if you get same object */
-static int test7(void)
+static void test_i915_self_import_to_different_fd(void)
 {
-	int ret;
 	drm_intel_bo *test_intel_bo, *test_intel_bo2;
 	int prime_fd;
 
@@ -270,139 +325,89 @@ static int test7(void)
 
 	test_intel_bo2 = drm_intel_bo_gem_create_from_prime(bufmgr2, prime_fd, BO_SIZE);
 	close(prime_fd);
-	if (!test_intel_bo2) {
-		ret = -1;
-		goto out;
-	}
+	igt_assert(test_intel_bo2);
 
-	ret = 0;
-	/* not sure what to test for, just that we don't explode */
-out:
 	drm_intel_bo_unreference(test_intel_bo2);
 	drm_intel_bo_unreference(test_intel_bo);
-	return ret;
 }
 
 /* nouveau export reimport to other driver test */
-static int test8(void)
+static void test_nv_self_import_to_different_fd(void)
 {
-	int ret;
 	int prime_fd;
 	struct nouveau_bo *nvbo, *nvbo2;
 
-	ret = nouveau_bo_new(ndev, NOUVEAU_BO_GART | NOUVEAU_BO_MAP,
-			     0, BO_SIZE, NULL, &nvbo);
-	if (ret < 0)
-		return ret;
-	ret = nouveau_bo_set_prime(nvbo, &prime_fd);
-	if (ret < 0)
-		return ret;
+	igt_assert(nouveau_bo_new(ndev, NOUVEAU_BO_GART | NOUVEAU_BO_MAP,
+				  0, BO_SIZE, NULL, &nvbo) == 0);
+	igt_assert(nouveau_bo_set_prime(nvbo, &prime_fd) == 0);
 
-	ret = nouveau_bo_prime_handle_ref(ndev2, prime_fd, &nvbo2);
+	igt_assert(nouveau_bo_prime_handle_ref(ndev2, prime_fd, &nvbo2) == 0);
 	close(prime_fd);
-	if (ret < 0)
-		return ret;
 
 	/* not sure what to test for, just make sure we don't explode */
 	nouveau_bo_ref(NULL, &nvbo);
 	nouveau_bo_ref(NULL, &nvbo2);
-	return 0;
 }
 
-int main(int argc, char **argv)
+igt_main
 {
-	int ret;
+	igt_fixture {
+		find_and_open_devices();
 
-	ret = find_and_open_devices();
-	if (ret < 0)
-		return ret;
+		igt_require(nouveau_fd != -1);
+		igt_require(nouveau_fd2 != -1);
+		igt_require(intel_fd != -1);
+		igt_require(intel_fd2 != -1);
 
-	if (nouveau_fd == -1 || intel_fd == -1 || nouveau_fd2 == -1 || intel_fd2 == -1) {
-		fprintf(stderr,"failed to find intel and nouveau GPU\n");
-		return 77;
+		/* set up intel bufmgr */
+		bufmgr = drm_intel_bufmgr_gem_init(intel_fd, 4096);
+		igt_assert(bufmgr);
+		/* Do not enable reuse, we share (almost) all buffers. */
+		//drm_intel_bufmgr_gem_enable_reuse(bufmgr);
+
+		bufmgr2 = drm_intel_bufmgr_gem_init(intel_fd2, 4096);
+		igt_assert(bufmgr2);
+		drm_intel_bufmgr_gem_enable_reuse(bufmgr2);
+
+		/* set up nouveau bufmgr */
+		igt_assert(nouveau_device_wrap(nouveau_fd, 0, &ndev) >= 0);
+		igt_assert(nouveau_client_new(ndev, &nclient) >= 0);
+
+		/* set up nouveau bufmgr */
+		igt_assert(nouveau_device_wrap(nouveau_fd2, 0, &ndev2) >= 0);
+
+		igt_assert(nouveau_client_new(ndev2, &nclient2) >= 0);;
+
+		/* set up an intel batch buffer */
+		devid = intel_get_drm_devid(intel_fd);
+		intel_batch = intel_batchbuffer_alloc(bufmgr, devid);
+		igt_assert(intel_batch);
 	}
 
-	/* set up intel bufmgr */
-	bufmgr = drm_intel_bufmgr_gem_init(intel_fd, 4096);
-	if (!bufmgr)
-		return -1;
-	/* Do not enable reuse, we share (almost) all buffers. */
-	//drm_intel_bufmgr_gem_enable_reuse(bufmgr);
+#define xtest(name) \
+	igt_subtest(#name) \
+		test_##name();
 
-	bufmgr2 = drm_intel_bufmgr_gem_init(intel_fd2, 4096);
-	if (!bufmgr2)
-		return -1;
-	drm_intel_bufmgr_gem_enable_reuse(bufmgr2);
+	xtest(i915_nv_import_twice);
+	xtest(i915_nv_import_twice_check_flink_name);
+	xtest(i915_nv_reimport_twice_check_flink_name);
+	xtest(nv_i915_import_twice_check_flink_name);
+	xtest(nv_i915_reimport_twice_check_flink_name);
+	xtest(i915_nv_import_vs_close);
+	xtest(i915_nv_double_import);
+	xtest(i915_nv_double_export);
+	xtest(i915_self_import);
+	xtest(nv_self_import);
+	xtest(i915_self_import_to_different_fd);
+	xtest(nv_self_import_to_different_fd);
+	
+	igt_fixture {
+		intel_batchbuffer_free(intel_batch);
 
-	/* set up nouveau bufmgr */
-	ret = nouveau_device_wrap(nouveau_fd, 0, &ndev);
-	if (ret < 0) {
-		fprintf(stderr,"failed to wrap nouveau device\n");
-		return 77;
+		nouveau_device_del(&ndev);
+		drm_intel_bufmgr_destroy(bufmgr);
+
+		close(intel_fd);
+		close(nouveau_fd);
 	}
-
-	ret = nouveau_client_new(ndev, &nclient);
-	if (ret < 0) {
-		fprintf(stderr,"failed to setup nouveau client\n");
-		return -1;
-	}
-
-	/* set up nouveau bufmgr */
-	ret = nouveau_device_wrap(nouveau_fd2, 0, &ndev2);
-	if (ret < 0) {
-		fprintf(stderr,"failed to wrap nouveau device\n");
-		return 77;
-	}
-
-	ret = nouveau_client_new(ndev2, &nclient2);
-	if (ret < 0) {
-		fprintf(stderr,"failed to setup nouveau client\n");
-		return -1;
-	}
-
-	/* set up an intel batch buffer */
-	devid = intel_get_drm_devid(intel_fd);
-	intel_batch = intel_batchbuffer_alloc(bufmgr, devid);
-
-	ret = test1();
-	if (ret)
-		fprintf(stderr,"prime_test: failed test 1\n");
-
-	ret = test2();
-	if (ret)
-		fprintf(stderr,"prime_test: failed test 2\n");
-
-	ret = test3();
-	if (ret)
-		fprintf(stderr,"prime_test: failed test 3\n");
-
-	ret = test4();
-	if (ret)
-		fprintf(stderr,"prime_test: failed test 4\n");
-
-	ret = test5();
-	if (ret)
-		fprintf(stderr,"prime_test: failed test 5\n");
-
-	ret = test6();
-	if (ret)
-		fprintf(stderr,"prime_test: failed test 6\n");
-
-	ret = test7();
-	if (ret)
-		fprintf(stderr,"prime_test: failed test 7\n");
-
-	ret = test8();
-	if (ret)
-		fprintf(stderr,"prime_test: failed test 8\n");
-
-	intel_batchbuffer_free(intel_batch);
-
-	nouveau_device_del(&ndev);
-	drm_intel_bufmgr_destroy(bufmgr);
-
-	close(intel_fd);
-	close(nouveau_fd);
-
-	return ret;
 }

@@ -35,19 +35,19 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <assert.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 
-#include "drm.h"
-#include "i915_drm.h"
-#include "intel_bufmgr.h"
-#include "intel_batchbuffer.h"
-#include "intel_gpu_tools.h"
-#include "rendercopy.h"
+#include <drm.h>
+
+#include "ioctl_wrappers.h"
+#include "drmtest.h"
+#include "intel_chipset.h"
+#include "intel_io.h"
+#include "igt_aux.h"
 
 struct bo {
 	const char *ring;
@@ -95,8 +95,8 @@ static int check_bo(struct bo *b)
 			int x = i % width;
 			int y = i / width;
 
-			printf("%s: copy #%d at %d,%d failed: read 0x%08x\n",
-			       b->ring, i, x, y, map[i]);
+			igt_info("%s: copy #%d at %d,%d failed: read 0x%08x\n",
+				 b->ring, i, x, y, map[i]);
 		}
 	}
 	drm_intel_bo_unmap(b->dst);
@@ -114,9 +114,9 @@ static void destroy_bo(struct bo *b)
 static int check_ring(drm_intel_bufmgr *bufmgr,
 		      struct intel_batchbuffer *batch,
 		      const char *ring,
-		      render_copyfunc_t copy)
+		      igt_render_copyfunc_t copy)
 {
-	struct scratch_buf src, tmp, dst;
+	struct igt_buf src, tmp, dst;
 	struct bo bo;
 	char output[100];
 	int i;
@@ -127,7 +127,6 @@ static int check_ring(drm_intel_bufmgr *bufmgr,
 
 	src.stride = 4 * width;
 	src.tiling = 0;
-	src.data = src.cpu_mapping = NULL;
 	src.size = 4 * width * height;
 	src.num_tiles = 4 * width * height;
 	dst = tmp = src;
@@ -155,18 +154,18 @@ static int check_ring(drm_intel_bufmgr *bufmgr,
 		int x = i % width;
 		int y = i / width;
 
-		drmtest_progress(output, i, width*height);
+		igt_progress(output, i, width*height);
 
-		assert(y < height);
+		igt_assert(y < height);
 
 		/* Dummy load to fill the ring */
-		copy(batch, &src, 0, 0, width, height, &tmp, 0, 0);
+		copy(batch, NULL, &src, 0, 0, width, height, &tmp, 0, 0);
 		/* And copy the src into dst, pixel by pixel */
-		copy(batch, &src, x, y, 1, 1, &dst, x, y);
+		copy(batch, NULL, &src, x, y, 1, 1, &dst, x, y);
 	}
 
 	/* verify */
-	printf("verifying\n");
+	igt_info("verifying\n");
 	i = check_bo(&bo);
 	destroy_bo(&bo);
 
@@ -174,60 +173,63 @@ static int check_ring(drm_intel_bufmgr *bufmgr,
 }
 
 static void blt_copy(struct intel_batchbuffer *batch,
-		     struct scratch_buf *src, unsigned src_x, unsigned src_y,
+		     drm_intel_context *context,
+		     struct igt_buf *src, unsigned src_x, unsigned src_y,
 		     unsigned w, unsigned h,
-		     struct scratch_buf *dst, unsigned dst_x, unsigned dst_y)
+		     struct igt_buf *dst, unsigned dst_x, unsigned dst_y)
 {
-	BEGIN_BATCH(8);
-	OUT_BATCH(XY_SRC_COPY_BLT_CMD |
-		  XY_SRC_COPY_BLT_WRITE_ALPHA |
-		  XY_SRC_COPY_BLT_WRITE_RGB);
+	BLIT_COPY_BATCH_START(batch->devid, 0);
 	OUT_BATCH((3 << 24) | /* 32 bits */
 		  (0xcc << 16) | /* copy ROP */
 		  dst->stride);
 	OUT_BATCH((dst_y << 16) | dst_x); /* dst x1,y1 */
 	OUT_BATCH(((dst_y + h) << 16) | (dst_x + w)); /* dst x2,y2 */
 	OUT_RELOC(dst->bo, I915_GEM_DOMAIN_RENDER, I915_GEM_DOMAIN_RENDER, 0);
+	BLIT_RELOC_UDW(batch->devid);
 	OUT_BATCH((src_y << 16) | src_x); /* src x1,y1 */
 	OUT_BATCH(src->stride);
 	OUT_RELOC(src->bo, I915_GEM_DOMAIN_RENDER, 0, 0);
+	BLIT_RELOC_UDW(batch->devid);
 	ADVANCE_BATCH();
 
 	intel_batchbuffer_flush(batch);
 }
 
-int main(int argc, char **argv)
+drm_intel_bufmgr *bufmgr;
+struct intel_batchbuffer *batch;
+int fd;
+
+igt_main
 {
-	drm_intel_bufmgr *bufmgr;
-	struct intel_batchbuffer *batch;
-	render_copyfunc_t copy;
-	int fd, fails = 0;
+	igt_skip_on_simulation();
 
-	fd = drm_open_any();
+	igt_fixture {
+		fd = drm_open_any();
 
-	bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
-	drm_intel_bufmgr_gem_enable_reuse(bufmgr);
-	batch = intel_batchbuffer_alloc(bufmgr, intel_get_drm_devid(fd));
+		bufmgr = drm_intel_bufmgr_gem_init(fd, 4096);
+		drm_intel_bufmgr_gem_enable_reuse(bufmgr);
+		batch = intel_batchbuffer_alloc(bufmgr, intel_get_drm_devid(fd));
+	}
 
-	fails += check_ring(bufmgr, batch, "blt", blt_copy);
+	igt_subtest("blitter")
+		check_ring(bufmgr, batch, "blt", blt_copy);
 
 	/* Strictly only required on architectures with a separate BLT ring,
 	 * but lets stress everybody.
 	 */
-	copy = NULL;
-	if (IS_GEN2(batch->devid))
-		copy = gen2_render_copyfunc;
-	else if (IS_GEN3(batch->devid))
-		copy = gen3_render_copyfunc;
-	else if (IS_GEN6(batch->devid))
-		copy = gen6_render_copyfunc;
-	if (copy)
-		fails += check_ring(bufmgr, batch, "render", copy);
+	igt_subtest("render") {
+		igt_render_copyfunc_t copy;
 
-	intel_batchbuffer_free(batch);
-	drm_intel_bufmgr_destroy(bufmgr);
+		copy = igt_get_render_copyfunc(batch->devid);
+		igt_require(copy);
 
-	close(fd);
+		check_ring(bufmgr, batch, "render", copy);
+	}
 
-	return fails != 0;
+	igt_fixture {
+		intel_batchbuffer_free(batch);
+		drm_intel_bufmgr_destroy(bufmgr);
+
+		close(fd);
+	}
 }
