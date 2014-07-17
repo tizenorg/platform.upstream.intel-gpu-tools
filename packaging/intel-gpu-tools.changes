@@ -1,0 +1,5 @@
+* Fri Jan 25 2013 Geoffroy Van Cutsem <geoffroy.vancutsem@intel.com> intel-gpu-tools-1.3
+- Initial release to Tizen
+-  custom .gbs.conf file
+-  packaging information
+
