@@ -1,8 +1,7 @@
 Name:       intel-gpu-tools
-Summary:    Diagnositc tools for Intel Integrated Graphics
-Version:    1.3
-Release:    1
-VCS:        git/xorg/app/intel-gpu-tools.git#intel-gpu-tools-1.3-1-g24e49c7
+Summary:    Diagnostic tools for Intel Integrated Graphics
+Version:    1.7
+Release:    0
 Group:      Development/Tools
 License:    MIT
 URL:        http://xorg.freedesktop.org/
@@ -13,6 +12,7 @@ BuildRequires:  pkgconfig(xorg-macros)
 BuildRequires:  pkgconfig(cairo)
 BuildRequires:  pkgconfig(libudev)
 
+
 %description
 Description: %{summary}
 
@@ -20,15 +20,20 @@ Description: %{summary}
 %setup -q -n %{name}-%{version}
 
 %build
-%reconfigure --disable-static \
-	--disable-nouveau
-make %{?jobs:-j%jobs}
+
+%reconfigure \
+    --disable-nouveau \
+    --disable-static \
+    --disable-tests
+
+make %{?_smp_mflags}
 
 %install
 rm -rf %{buildroot}
-%make_install 
+%make_install
 
 %files
+%license COPYING
 %defattr(-,root,root,-)
 %doc README
 %{_bindir}/*
