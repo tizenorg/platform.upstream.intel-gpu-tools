@@ -6,6 +6,7 @@ Group:      Development/Tools
 License:    MIT
 URL:        http://xorg.freedesktop.org/
 #X-Vc-Url:  git://anongit.freedesktop.org/xorg/app/intel-gpu-tools
+ExclusiveArch:  %ix86 x86_64
 Source0:    http://xorg.freedesktop.org/archive/individual/app/intel-gpu-tools-%{version}.tar.bz2
 BuildRequires:  pkgconfig(libdrm_intel)
 BuildRequires:  pkgconfig(pciaccess)
